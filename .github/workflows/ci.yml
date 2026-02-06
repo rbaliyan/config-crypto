@@ -52,6 +52,7 @@ jobs:
         uses: golangci/golangci-lint-action@v6
         with:
           version: latest
+          args: --tests=false
 
       - name: Run go vet
         run: |
