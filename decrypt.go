@@ -14,6 +14,11 @@ func decrypt(data []byte, provider KeyProvider) ([]byte, error) {
 		return nil, err
 	}
 
+	// GCM ciphertext must contain at least the authentication tag
+	if len(ciphertext) < gcmTagSize {
+		return nil, fmt.Errorf("%w: ciphertext too short", ErrInvalidFormat)
+	}
+
 	// Look up the KEK by key ID
 	kek, err := provider.KeyByID(h.keyID)
 	if err != nil {

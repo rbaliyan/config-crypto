@@ -4,7 +4,7 @@ go 1.24.2
 
 require (
 	github.com/aws/aws-sdk-go-v2/service/kms v1.49.5
-	github.com/rbaliyan/config-crypto v0.0.0
+	github.com/rbaliyan/config-crypto v0.1.0
 )
 
 require (
@@ -16,5 +16,3 @@ require (
 	github.com/rbaliyan/config v0.2.5 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 )
-
-replace github.com/rbaliyan/config-crypto => ../

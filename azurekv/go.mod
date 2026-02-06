@@ -4,7 +4,7 @@ go 1.24.2
 
 require (
 	github.com/Azure/azure-sdk-for-go/sdk/security/keyvault/azkeys v1.4.0
-	github.com/rbaliyan/config-crypto v0.0.0
+	github.com/rbaliyan/config-crypto v0.1.0
 )
 
 require (
@@ -17,5 +17,3 @@ require (
 	golang.org/x/text v0.33.0 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 )
-
-replace github.com/rbaliyan/config-crypto => ../

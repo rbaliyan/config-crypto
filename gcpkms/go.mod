@@ -4,7 +4,7 @@ go 1.24.2
 
 require (
 	cloud.google.com/go/kms v1.25.0
-	github.com/rbaliyan/config-crypto v0.0.0
+	github.com/rbaliyan/config-crypto v0.1.0
 )
 
 require (
@@ -20,5 +20,3 @@ require (
 	google.golang.org/protobuf v1.36.10 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 )
-
-replace github.com/rbaliyan/config-crypto => ../

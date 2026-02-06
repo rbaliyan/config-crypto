@@ -136,5 +136,8 @@ func readHeader(data []byte) (*header, []byte, error) {
 	h.dataNonce = append([]byte(nil), data[offset:offset+gcmNonceSize]...)
 	offset += gcmNonceSize
 
-	return h, data[offset:], nil
+	ciphertext := make([]byte, len(data)-offset)
+	copy(ciphertext, data[offset:])
+
+	return h, ciphertext, nil
 }

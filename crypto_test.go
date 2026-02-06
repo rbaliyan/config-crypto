@@ -451,6 +451,149 @@ func TestCodecEncodeInnerCodecFailure(t *testing.T) {
 	}
 }
 
+func TestDecryptCiphertextTooShort(t *testing.T) {
+	// Encrypt something valid, then truncate the ciphertext
+	key := makeKey(32)
+	provider, err := NewStaticKeyProvider(key, "test-key")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	data, err := encrypt([]byte("hello"), Key{ID: "test-key", Bytes: key})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Truncate to just the header (remove all ciphertext)
+	h := headerSize("test-key")
+	truncated := data[:h]
+
+	_, err = decrypt(truncated, provider)
+	if !IsInvalidFormat(err) {
+		t.Errorf("expected ErrInvalidFormat for truncated ciphertext, got %v", err)
+	}
+}
+
+func TestDecryptCiphertextPartialTag(t *testing.T) {
+	key := makeKey(32)
+	provider, err := NewStaticKeyProvider(key, "test-key")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	data, err := encrypt([]byte("hello"), Key{ID: "test-key", Bytes: key})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Keep header + partial GCM tag (less than 16 bytes)
+	h := headerSize("test-key")
+	truncated := data[:h+8]
+
+	_, err = decrypt(truncated, provider)
+	if !IsInvalidFormat(err) {
+		t.Errorf("expected ErrInvalidFormat for partial GCM tag, got %v", err)
+	}
+}
+
+func TestEncryptDecryptEmptyPlaintext(t *testing.T) {
+	key := makeKey(32)
+	provider, err := NewStaticKeyProvider(key, "test-key")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	data, err := encrypt([]byte{}, Key{ID: "test-key", Bytes: key})
+	if err != nil {
+		t.Fatalf("encrypt empty: %v", err)
+	}
+
+	plaintext, err := decrypt(data, provider)
+	if err != nil {
+		t.Fatalf("decrypt empty: %v", err)
+	}
+	if len(plaintext) != 0 {
+		t.Errorf("expected empty plaintext, got %d bytes", len(plaintext))
+	}
+}
+
+func TestEncryptInvalidKeySize(t *testing.T) {
+	_, err := encrypt([]byte("hello"), Key{ID: "bad", Bytes: makeKey(16)})
+	if !IsInvalidKeySize(err) {
+		t.Errorf("expected ErrInvalidKeySize, got %v", err)
+	}
+}
+
+func TestDecryptInvalidKeySize(t *testing.T) {
+	key := makeKey(32)
+	data, err := encrypt([]byte("hello"), Key{ID: "test-key", Bytes: key})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Provider returns a key with wrong size
+	badProvider := &badKeySizeProvider{id: "test-key", bytes: makeKey(16)}
+	_, err = decrypt(data, badProvider)
+	if !IsInvalidKeySize(err) {
+		t.Errorf("expected ErrInvalidKeySize, got %v", err)
+	}
+}
+
+type badKeySizeProvider struct {
+	id    string
+	bytes []byte
+}
+
+func (p *badKeySizeProvider) CurrentKey() (Key, error) {
+	return Key{ID: p.id, Bytes: p.bytes}, nil
+}
+
+func (p *badKeySizeProvider) KeyByID(id string) (Key, error) {
+	if id == p.id {
+		return Key{ID: p.id, Bytes: p.bytes}, nil
+	}
+	return Key{}, ErrKeyNotFound
+}
+
+func TestReadHeaderCiphertextIsolated(t *testing.T) {
+	// Verify that mutating the returned ciphertext doesn't affect the input
+	h := &header{
+		version:      formatVersion,
+		algorithm:    algAES256GCM,
+		keyID:        "k",
+		dekNonce:     make([]byte, gcmNonceSize),
+		encryptedDEK: make([]byte, encryptedDEKSize),
+		dataNonce:    make([]byte, gcmNonceSize),
+	}
+
+	var buf bytes.Buffer
+	if err := writeHeader(&buf, h); err != nil {
+		t.Fatal(err)
+	}
+
+	original := []byte("test-ciphertext")
+	input := append(buf.Bytes(), original...)
+
+	// Save a copy of the input for comparison
+	inputCopy := make([]byte, len(input))
+	copy(inputCopy, input)
+
+	_, ciphertext, err := readHeader(input)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Mutate the returned ciphertext
+	for i := range ciphertext {
+		ciphertext[i] = 0xFF
+	}
+
+	// Input should be unchanged (defensive copy)
+	if !bytes.Equal(input, inputCopy) {
+		t.Error("mutating returned ciphertext corrupted the input slice")
+	}
+}
+
 func TestWriteHeaderKeyIDTooLong(t *testing.T) {
 	h := &header{
 		version:      formatVersion,

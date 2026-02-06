@@ -88,6 +88,8 @@ Core module:
 - Go stdlib: `crypto/aes`, `crypto/cipher`, `crypto/rand` — no third-party crypto
 
 KMS sub-modules have their own go.mod and only pull their respective SDK.
+Sub-modules reference the published core module (no replace directives).
+For local development against unreleased core changes, temporarily add `replace github.com/rbaliyan/config-crypto => ../` to the sub-module's go.mod.
 
 ## Testing
 

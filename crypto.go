@@ -9,6 +9,9 @@ import (
 // Codec wraps an inner codec with envelope encryption.
 // On Encode, the inner codec serializes the value, then the result is encrypted.
 // On Decode, the data is decrypted, then the inner codec deserializes the plaintext.
+//
+// Codec is safe for concurrent use if the underlying KeyProvider and inner codec are safe
+// for concurrent use. StaticKeyProvider satisfies this requirement.
 type Codec struct {
 	inner    codec.Codec
 	provider KeyProvider
