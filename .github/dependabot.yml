@@ -1,0 +1,55 @@
+version: 2
+updates:
+  - package-ecosystem: gomod
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      go-dependencies:
+        patterns:
+          - "*"
+
+  - package-ecosystem: gomod
+    directory: /awskms
+    schedule:
+      interval: weekly
+    groups:
+      aws-dependencies:
+        patterns:
+          - "*"
+
+  - package-ecosystem: gomod
+    directory: /gcpkms
+    schedule:
+      interval: weekly
+    groups:
+      gcp-dependencies:
+        patterns:
+          - "*"
+
+  - package-ecosystem: gomod
+    directory: /azurekv
+    schedule:
+      interval: weekly
+    groups:
+      azure-dependencies:
+        patterns:
+          - "*"
+
+  - package-ecosystem: gomod
+    directory: /vault
+    schedule:
+      interval: weekly
+    groups:
+      vault-dependencies:
+        patterns:
+          - "*"
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      github-actions:
+        patterns:
+          - "*"
