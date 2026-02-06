@@ -1,0 +1,66 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: Create Release
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Go
+        uses: actions/setup-go@7a3fe6cf4cb3a834922a1244abfce67bcef6a0c5 # v6
+        with:
+          go-version: '1.24'
+
+      - name: Run tests
+        run: |
+          go test -race ./...
+          cd awskms && go test -race ./...
+          cd ../gcpkms && go test -race ./...
+          cd ../azurekv && go test -race ./...
+          cd ../vault && go test -race ./...
+
+      - name: Generate release notes
+        id: notes
+        run: |
+          TAG=${GITHUB_REF#refs/tags/}
+          PREV_TAG=$(git describe --tags --abbrev=0 "$TAG^" 2>/dev/null || echo "")
+          if [ -n "$PREV_TAG" ]; then
+            RANGE="${PREV_TAG}..${TAG}"
+          else
+            RANGE="$TAG"
+          fi
+          {
+            echo "notes<<EOF"
+            echo "## What's Changed"
+            echo ""
+            git log "$RANGE" --pretty=format:"- %s" --no-merges
+            echo ""
+            echo ""
+            echo "## Modules"
+            echo ""
+            echo "| Module | Install |"
+            echo "|--------|---------|"
+            echo "| Core | \`go get github.com/rbaliyan/config-crypto@${TAG}\` |"
+            echo "| AWS KMS | \`go get github.com/rbaliyan/config-crypto/awskms@${TAG}\` |"
+            echo "| GCP Cloud KMS | \`go get github.com/rbaliyan/config-crypto/gcpkms@${TAG}\` |"
+            echo "| Azure Key Vault | \`go get github.com/rbaliyan/config-crypto/azurekv@${TAG}\` |"
+            echo "| Vault Transit | \`go get github.com/rbaliyan/config-crypto/vault@${TAG}\` |"
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          body: ${{ steps.notes.outputs.notes }}
+          generate_release_notes: false
