@@ -1,5 +1,9 @@
 # config-crypto
 
+[![CI](https://github.com/rbaliyan/config-crypto/actions/workflows/ci.yml/badge.svg)](https://github.com/rbaliyan/config-crypto/actions/workflows/ci.yml)
+[![Go Reference](https://pkg.go.dev/badge/github.com/rbaliyan/config-crypto.svg)](https://pkg.go.dev/github.com/rbaliyan/config-crypto)
+[![Go Report Card](https://goreportcard.com/badge/github.com/rbaliyan/config-crypto)](https://goreportcard.com/report/github.com/rbaliyan/config-crypto)
+
 Encryption codec for the [config](https://github.com/rbaliyan/config) library. Provides transparent encryption of configuration values using AES-256-GCM with envelope encryption.
 
 ## Installation
