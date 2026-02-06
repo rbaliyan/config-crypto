@@ -29,9 +29,10 @@ Each value gets a unique random DEK (Data Encryption Key), which is itself encry
 ### Security Properties
 
 - **Envelope encryption**: random DEK per value, DEK wrapped with KEK
-- **AAD binding**: key ID is used as GCM additional authenticated data, preventing key ID substitution
+- **AAD binding**: key ID is used as GCM additional authenticated data on both DEK-wrapping and data-encryption layers, preventing key ID substitution
 - **DEK zeroing**: ephemeral key material is cleared after use
 - **Defensive copies**: key bytes are copied on construction; header parsing copies slices from input
+- **Key material destruction**: `StaticKeyProvider.Destroy()` zeros all key material and blocks further operations
 - **Input validation**: `NewCodec` panics on nil inputs; `NewStaticKeyProvider` and `WithOldKey` validate key size and ID
 
 ### Binary Format (v1)
@@ -52,9 +53,26 @@ Each value gets a unique random DEK (Data Encryption Key), which is itself encry
 | `decrypt.go` | `decrypt()` — parses header, unwraps DEK, decrypts data, zeroes DEK |
 | `format.go` | Binary format constants, `header` struct, `writeHeader()`, `readHeader()` with defensive copies |
 | `key_provider.go` | `Key` struct, `KeyProvider` interface |
-| `static_provider.go` | `StaticKeyProvider` with rotation support, key byte copying, deferred option validation |
+| `static_provider.go` | `StaticKeyProvider` with rotation support, key byte copying, `Destroy()`, deferred option validation |
 | `errors.go` | Sentinel errors with `Is*()` helpers |
 | `benchmark_test.go` | Benchmarks for encode/decode at 1KB, 64KB, 1MB, and string payloads |
+
+### KMS Provider Sub-Modules
+
+Each KMS provider is a separate Go module to avoid pulling unnecessary SDK dependencies.
+
+| Module | Import Path | SDK |
+|--------|-------------|-----|
+| `awskms/` | `github.com/rbaliyan/config-crypto/awskms` | `aws-sdk-go-v2/service/kms` |
+| `gcpkms/` | `github.com/rbaliyan/config-crypto/gcpkms` | `cloud.google.com/go/kms` |
+| `azurekv/` | `github.com/rbaliyan/config-crypto/azurekv` | `azure-sdk-for-go/azkeys` |
+| `vault/` | `github.com/rbaliyan/config-crypto/vault` | None (interface-based, bring your own HTTP client) |
+
+All KMS providers follow the same pattern:
+- Accept a `Client` interface (subset of the real SDK) for testability
+- Decrypt/unwrap keys at construction time, cache in a `StaticKeyProvider`
+- Client is not retained after construction
+- Decrypted key bytes are zeroed after being copied into the provider
 
 ### Key Rotation Flow
 
@@ -65,16 +83,20 @@ Each value gets a unique random DEK (Data Encryption Key), which is itself encry
 
 ## Dependencies
 
+Core module:
 - `github.com/rbaliyan/config` — for `codec.Codec` interface only
 - Go stdlib: `crypto/aes`, `crypto/cipher`, `crypto/rand` — no third-party crypto
+
+KMS sub-modules have their own go.mod and only pull their respective SDK.
 
 ## Testing
 
 ```bash
-just test              # All tests
+just test              # Core module tests
 just test-race         # Race condition detection
 just test-v            # Verbose output
 just test-coverage     # Coverage report
+just test-all          # All modules (core + KMS providers)
 ```
 
 Key test scenarios:

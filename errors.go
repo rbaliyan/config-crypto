@@ -17,6 +17,9 @@ var (
 
 	// ErrInvalidKeyID is returned when a key ID is empty or invalid.
 	ErrInvalidKeyID = errors.New("crypto: invalid key ID")
+
+	// ErrProviderDestroyed is returned when a provider has been destroyed.
+	ErrProviderDestroyed = errors.New("crypto: provider has been destroyed")
 )
 
 // IsKeyNotFound returns true if the error is or wraps ErrKeyNotFound.
@@ -42,4 +45,9 @@ func IsDecryptionFailed(err error) bool {
 // IsInvalidKeyID returns true if the error is or wraps ErrInvalidKeyID.
 func IsInvalidKeyID(err error) bool {
 	return errors.Is(err, ErrInvalidKeyID)
+}
+
+// IsProviderDestroyed returns true if the error is or wraps ErrProviderDestroyed.
+func IsProviderDestroyed(err error) bool {
+	return errors.Is(err, ErrProviderDestroyed)
 }

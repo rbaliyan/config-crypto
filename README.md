@@ -96,9 +96,90 @@ To re-encrypt all values with the new key:
 1. Read all values (auto-decrypts with old key via header key ID)
 2. Re-set them (auto-encrypts with new current key)
 
+## Key Material Cleanup
+
+When a provider is no longer needed, call `Destroy()` to zero all key material in memory:
+
+```go
+provider, _ := crypto.NewStaticKeyProvider(key, "key-1")
+defer provider.Destroy()
+```
+
+After `Destroy()`, all operations return `ErrProviderDestroyed`.
+
+## KMS Providers
+
+Each KMS provider is a **separate Go module** — you only pull the SDK you need.
+
+### AWS KMS
+
+```bash
+go get github.com/rbaliyan/config-crypto/awskms
+```
+
+```go
+import "github.com/rbaliyan/config-crypto/awskms"
+
+cfg, _ := awsconfig.LoadDefaultConfig(ctx)
+kmsClient := kms.NewFromConfig(cfg)
+
+provider, _ := awskms.New(ctx, kmsClient,
+    awskms.WithEncryptedKey(encryptedKeyBytes, "key-1"),
+)
+encJSON := crypto.NewCodec(codec.JSON(), provider)
+```
+
+### GCP Cloud KMS
+
+```bash
+go get github.com/rbaliyan/config-crypto/gcpkms
+```
+
+```go
+import "github.com/rbaliyan/config-crypto/gcpkms"
+
+client, _ := kms.NewKeyManagementClient(ctx)
+provider, _ := gcpkms.New(ctx, client,
+    gcpkms.WithEncryptedKey(ciphertext, "key-1", "projects/p/locations/l/keyRings/r/cryptoKeys/k"),
+)
+```
+
+### Azure Key Vault
+
+```bash
+go get github.com/rbaliyan/config-crypto/azurekv
+```
+
+```go
+import "github.com/rbaliyan/config-crypto/azurekv"
+
+cred, _ := azidentity.NewDefaultAzureCredential(nil)
+client, _ := azkeys.NewClient("https://my-vault.vault.azure.net/", cred, nil)
+provider, _ := azurekv.New(ctx, client,
+    azurekv.WithWrappedKey(wrappedBytes, "key-1", "my-key", "v1"),
+)
+```
+
+### HashiCorp Vault (Transit)
+
+```bash
+go get github.com/rbaliyan/config-crypto/vault
+```
+
+```go
+import "github.com/rbaliyan/config-crypto/vault"
+
+// Implement the vault.Client interface with your preferred HTTP client
+provider, _ := vault.New(ctx, client,
+    vault.WithEncryptedKey("vault:v1:base64data", "key-1", "my-transit-key"),
+)
+```
+
+All KMS providers decrypt keys at construction time and cache them in a `StaticKeyProvider`. The KMS client is not retained after construction. Key rotation works the same way — pass multiple keys, first is current.
+
 ## Custom Key Providers
 
-Implement the `KeyProvider` interface for custom key management (e.g., HashiCorp Vault, AWS KMS):
+Implement the `KeyProvider` interface for other key management systems:
 
 ```go
 type KeyProvider interface {

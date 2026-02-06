@@ -8,10 +8,11 @@ import (
 // StaticKeyProvider is a KeyProvider backed by in-memory keys.
 // It is safe for concurrent use.
 type StaticKeyProvider struct {
-	mu      sync.RWMutex
-	current Key
-	keys    map[string]Key
-	err     error // deferred validation error from options
+	mu        sync.RWMutex
+	current   Key
+	keys      map[string]Key
+	err       error // deferred validation error from options
+	destroyed bool
 }
 
 // StaticOption configures a StaticKeyProvider.
@@ -73,6 +74,9 @@ func NewStaticKeyProvider(keyBytes []byte, id string, opts ...StaticOption) (*St
 func (p *StaticKeyProvider) CurrentKey() (Key, error) {
 	p.mu.RLock()
 	defer p.mu.RUnlock()
+	if p.destroyed {
+		return Key{}, ErrProviderDestroyed
+	}
 	return p.current, nil
 }
 
@@ -80,12 +84,30 @@ func (p *StaticKeyProvider) CurrentKey() (Key, error) {
 func (p *StaticKeyProvider) KeyByID(id string) (Key, error) {
 	p.mu.RLock()
 	defer p.mu.RUnlock()
+	if p.destroyed {
+		return Key{}, ErrProviderDestroyed
+	}
 
 	key, ok := p.keys[id]
 	if !ok {
 		return Key{}, fmt.Errorf("%w: %s", ErrKeyNotFound, id)
 	}
 	return key, nil
+}
+
+// Destroy zeros all key material held by this provider.
+// After Destroy is called, CurrentKey and KeyByID return ErrProviderDestroyed.
+// Safe for concurrent use.
+func (p *StaticKeyProvider) Destroy() {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	for _, k := range p.keys {
+		clear(k.Bytes)
+	}
+	clear(p.current.Bytes)
+	p.current = Key{}
+	p.keys = nil
+	p.destroyed = true
 }
 
 // Compile-time interface check.

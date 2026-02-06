@@ -53,7 +53,7 @@ func encrypt(plaintext []byte, kek Key) ([]byte, error) {
 	if _, err := io.ReadFull(rand.Reader, dataNonce); err != nil {
 		return nil, fmt.Errorf("crypto: failed to generate data nonce: %w", err)
 	}
-	ciphertext := dekGCM.Seal(nil, dataNonce, plaintext, nil)
+	ciphertext := dekGCM.Seal(nil, dataNonce, plaintext, []byte(kek.ID))
 
 	// Assemble output: header + ciphertext
 	h := &header{

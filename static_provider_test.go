@@ -219,3 +219,99 @@ func TestWithOldKeyEmptyID(t *testing.T) {
 		t.Errorf("expected ErrInvalidKeyID, got %v", err)
 	}
 }
+
+func TestStaticKeyProviderDestroy(t *testing.T) {
+	key := makeKey(32)
+	p, err := NewStaticKeyProvider(key, "key-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Should work before destroy
+	_, err = p.CurrentKey()
+	if err != nil {
+		t.Fatalf("CurrentKey before destroy: %v", err)
+	}
+
+	p.Destroy()
+
+	// CurrentKey should fail
+	_, err = p.CurrentKey()
+	if !IsProviderDestroyed(err) {
+		t.Errorf("CurrentKey after destroy: expected ErrProviderDestroyed, got %v", err)
+	}
+
+	// KeyByID should fail
+	_, err = p.KeyByID("key-1")
+	if !IsProviderDestroyed(err) {
+		t.Errorf("KeyByID after destroy: expected ErrProviderDestroyed, got %v", err)
+	}
+}
+
+func TestStaticKeyProviderDestroyZerosKeyMaterial(t *testing.T) {
+	key := makeKey(32)
+	p, err := NewStaticKeyProvider(key, "key-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Get a reference to the internal key bytes before destroy
+	got, _ := p.CurrentKey()
+	keyRef := got.Bytes
+
+	p.Destroy()
+
+	// Verify the bytes were zeroed
+	for i, b := range keyRef {
+		if b != 0 {
+			t.Errorf("key byte %d not zeroed: got %d", i, b)
+		}
+	}
+}
+
+func TestStaticKeyProviderDestroyWithOldKeys(t *testing.T) {
+	current := makeKey(32)
+	old := make([]byte, 32)
+	for i := range old {
+		old[i] = byte(i + 100)
+	}
+
+	p, err := NewStaticKeyProvider(current, "key-2",
+		WithOldKey(old, "key-1"),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Get references before destroy
+	currentKey, _ := p.CurrentKey()
+	oldKey, _ := p.KeyByID("key-1")
+	currentRef := currentKey.Bytes
+	oldRef := oldKey.Bytes
+
+	p.Destroy()
+
+	// Both should be zeroed
+	for i, b := range currentRef {
+		if b != 0 {
+			t.Errorf("current key byte %d not zeroed: got %d", i, b)
+		}
+	}
+	for i, b := range oldRef {
+		if b != 0 {
+			t.Errorf("old key byte %d not zeroed: got %d", i, b)
+		}
+	}
+}
+
+func TestStaticKeyProviderDestroyIdempotent(t *testing.T) {
+	key := makeKey(32)
+	p, err := NewStaticKeyProvider(key, "key-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Double destroy should not panic
+	p.Destroy()
+	p.Destroy()
+}

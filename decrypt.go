@@ -50,7 +50,7 @@ func decrypt(data []byte, provider KeyProvider) ([]byte, error) {
 		return nil, fmt.Errorf("%w: %v", ErrDecryptionFailed, err)
 	}
 
-	plaintext, err := dekGCM.Open(nil, h.dataNonce, ciphertext, nil)
+	plaintext, err := dekGCM.Open(nil, h.dataNonce, ciphertext, []byte(h.keyID))
 	if err != nil {
 		return nil, fmt.Errorf("%w: failed to decrypt data", ErrDecryptionFailed)
 	}
