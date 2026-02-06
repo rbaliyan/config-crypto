@@ -10,7 +10,7 @@ require (
 require (
 	cloud.google.com/go/longrunning v0.7.0 // indirect
 	github.com/BurntSushi/toml v1.6.0 // indirect
-	github.com/rbaliyan/config v0.2.3 // indirect
+	github.com/rbaliyan/config v0.2.5 // indirect
 	golang.org/x/net v0.47.0 // indirect
 	golang.org/x/sys v0.38.0 // indirect
 	golang.org/x/text v0.33.0 // indirect

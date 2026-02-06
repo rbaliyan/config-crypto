@@ -13,7 +13,7 @@ require (
 	github.com/aws/aws-sdk-go-v2/internal/configsources v1.4.17 // indirect
 	github.com/aws/aws-sdk-go-v2/internal/endpoints/v2 v2.7.17 // indirect
 	github.com/aws/smithy-go v1.24.0 // indirect
-	github.com/rbaliyan/config v0.2.3 // indirect
+	github.com/rbaliyan/config v0.2.5 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 )
 
