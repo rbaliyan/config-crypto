@@ -71,16 +71,18 @@ func NewStaticKeyProvider(keyBytes []byte, id string, opts ...StaticOption) (*St
 }
 
 // CurrentKey returns the current key for new encryptions.
+// The returned Key contains a copy of the internal bytes; callers cannot corrupt the provider.
 func (p *StaticKeyProvider) CurrentKey() (Key, error) {
 	p.mu.RLock()
 	defer p.mu.RUnlock()
 	if p.destroyed {
 		return Key{}, ErrProviderDestroyed
 	}
-	return p.current, nil
+	return p.current.copy(), nil
 }
 
 // KeyByID returns the key with the given ID.
+// The returned Key contains a copy of the internal bytes; callers cannot corrupt the provider.
 func (p *StaticKeyProvider) KeyByID(id string) (Key, error) {
 	p.mu.RLock()
 	defer p.mu.RUnlock()
@@ -92,7 +94,7 @@ func (p *StaticKeyProvider) KeyByID(id string) (Key, error) {
 	if !ok {
 		return Key{}, fmt.Errorf("%w: %s", ErrKeyNotFound, id)
 	}
-	return key, nil
+	return key.copy(), nil
 }
 
 // Destroy zeros all key material held by this provider.

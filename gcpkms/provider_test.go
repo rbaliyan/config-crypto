@@ -114,6 +114,34 @@ func TestNewDecryptFailure(t *testing.T) {
 	}
 }
 
+func TestNewDecryptedKeyZeroed(t *testing.T) {
+	plaintext := makeKey(32)
+	client := &mockClient{
+		keys: map[string][]byte{
+			"encrypted": plaintext,
+		},
+	}
+
+	_, err := New(context.Background(), client,
+		WithEncryptedKey([]byte("encrypted"), "key-1", "projects/p/locations/l/keyRings/r/cryptoKeys/k"),
+	)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	// The mock returns a direct reference, so we can verify zeroing
+	allZero := true
+	for _, b := range plaintext {
+		if b != 0 {
+			allZero = false
+			break
+		}
+	}
+	if !allZero {
+		t.Error("decrypted key material was not zeroed after construction")
+	}
+}
+
 func TestNewReturnsKeyProvider(t *testing.T) {
 	client := &mockClient{
 		keys: map[string][]byte{"encrypted": makeKey(32)},

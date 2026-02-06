@@ -9,6 +9,13 @@ type Key struct {
 	Bytes []byte
 }
 
+// copy returns a Key with a copied byte slice, preventing callers from mutating internal state.
+func (k Key) copy() Key {
+	b := make([]byte, len(k.Bytes))
+	copy(b, k.Bytes)
+	return Key{ID: k.ID, Bytes: b}
+}
+
 // KeyProvider abstracts key retrieval for encryption and decryption.
 // Implementations must be safe for concurrent use.
 type KeyProvider interface {

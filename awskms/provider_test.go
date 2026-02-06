@@ -11,8 +11,8 @@ import (
 
 // mockClient implements Client for testing.
 type mockClient struct {
-	keys    map[string][]byte // ciphertext -> plaintext
-	failOn  string            // ciphertext string to fail on
+	keys   map[string][]byte // ciphertext -> plaintext
+	failOn string            // ciphertext string to fail on
 }
 
 func (m *mockClient) Decrypt(ctx context.Context, params *kms.DecryptInput, optFns ...func(*kms.Options)) (*kms.DecryptOutput, error) {

@@ -2,6 +2,7 @@ package crypto
 
 import (
 	"bytes"
+	"fmt"
 	"testing"
 )
 
@@ -123,6 +124,79 @@ func TestReadHeaderTruncatedBody(t *testing.T) {
 	_, _, err := readHeader(data)
 	if !IsInvalidFormat(err) {
 		t.Errorf("expected ErrInvalidFormat, got %v", err)
+	}
+}
+
+func TestReadHeaderEmptyRemainingCiphertext(t *testing.T) {
+	h := &header{
+		version:      formatVersion,
+		algorithm:    algAES256GCM,
+		keyID:        "k",
+		dekNonce:     make([]byte, gcmNonceSize),
+		encryptedDEK: make([]byte, encryptedDEKSize),
+		dataNonce:    make([]byte, gcmNonceSize),
+	}
+
+	var buf bytes.Buffer
+	if err := writeHeader(&buf, h); err != nil {
+		t.Fatalf("writeHeader: %v", err)
+	}
+
+	// Input ends exactly at header boundary — no ciphertext
+	parsed, remaining, err := readHeader(buf.Bytes())
+	if err != nil {
+		t.Fatalf("readHeader: %v", err)
+	}
+	if parsed.keyID != "k" {
+		t.Errorf("keyID: got %q, want %q", parsed.keyID, "k")
+	}
+	if len(remaining) != 0 {
+		t.Errorf("remaining: got %d bytes, want 0", len(remaining))
+	}
+}
+
+// limitWriter writes up to n bytes then returns an error.
+type limitWriter struct {
+	n int
+}
+
+func (w *limitWriter) Write(p []byte) (int, error) {
+	if w.n <= 0 {
+		return 0, fmt.Errorf("write limit reached")
+	}
+	if len(p) > w.n {
+		n := w.n
+		w.n = 0
+		return n, fmt.Errorf("write limit reached")
+	}
+	w.n -= len(p)
+	return len(p), nil
+}
+
+func TestWriteHeaderFailingWriter(t *testing.T) {
+	h := &header{
+		version:      formatVersion,
+		algorithm:    algAES256GCM,
+		keyID:        "key-1",
+		dekNonce:     make([]byte, gcmNonceSize),
+		encryptedDEK: make([]byte, encryptedDEKSize),
+		dataNonce:    make([]byte, gcmNonceSize),
+	}
+
+	// Test failure at various byte offsets
+	totalSize := headerSize("key-1")
+	for limit := 0; limit < totalSize; limit++ {
+		w := &limitWriter{n: limit}
+		err := writeHeader(w, h)
+		if err == nil {
+			t.Errorf("writeHeader with limit=%d: expected error", limit)
+		}
+	}
+
+	// Writing the full size should succeed
+	w := &limitWriter{n: totalSize}
+	if err := writeHeader(w, h); err != nil {
+		t.Errorf("writeHeader with full limit: %v", err)
 	}
 }
 

@@ -118,6 +118,33 @@ func TestNewUnwrapFailure(t *testing.T) {
 	}
 }
 
+func TestNewDecryptedKeyZeroed(t *testing.T) {
+	plaintext := makeKey(32)
+	client := &mockClient{
+		keys: map[string][]byte{
+			"wrapped": plaintext,
+		},
+	}
+
+	_, err := New(context.Background(), client,
+		WithWrappedKey([]byte("wrapped"), "key-1", "my-key", "v1"),
+	)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	allZero := true
+	for _, b := range plaintext {
+		if b != 0 {
+			allZero = false
+			break
+		}
+	}
+	if !allZero {
+		t.Error("decrypted key material was not zeroed after construction")
+	}
+}
+
 func TestNewWithAlgorithm(t *testing.T) {
 	client := &mockClient{
 		keys: map[string][]byte{"wrapped": makeKey(32)},

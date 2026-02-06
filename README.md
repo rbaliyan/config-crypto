@@ -199,4 +199,4 @@ The encrypted payload uses a self-describing binary format:
 [12B data_nonce] [remaining: ciphertext + GCM tag]
 ```
 
-Overhead is ~82 + len(key_id) bytes per value.
+Overhead is ~93 + len(key_id) bytes per value (header + GCM authentication tag).

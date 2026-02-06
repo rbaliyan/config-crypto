@@ -200,6 +200,30 @@ func TestStaticKeyProviderOldKeyBytesCopied(t *testing.T) {
 	}
 }
 
+func TestStaticKeyProviderReturnedBytesIsolated(t *testing.T) {
+	key := makeKey(32)
+	p, err := NewStaticKeyProvider(key, "key-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Mutate the returned key bytes — provider should be unaffected
+	got, _ := p.CurrentKey()
+	clear(got.Bytes)
+
+	got2, _ := p.CurrentKey()
+	allZero := true
+	for _, b := range got2.Bytes {
+		if b != 0 {
+			allZero = false
+			break
+		}
+	}
+	if allZero {
+		t.Error("provider was corrupted by mutating returned key bytes")
+	}
+}
+
 func TestWithOldKeyInvalidSize(t *testing.T) {
 	current := makeKey(32)
 	_, err := NewStaticKeyProvider(current, "key-2",
@@ -255,14 +279,13 @@ func TestStaticKeyProviderDestroyZerosKeyMaterial(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Get a reference to the internal key bytes before destroy
-	got, _ := p.CurrentKey()
-	keyRef := got.Bytes
+	// Hold a reference to the internal backing array before destroy
+	internalRef := p.current.Bytes
 
 	p.Destroy()
 
-	// Verify the bytes were zeroed
-	for i, b := range keyRef {
+	// Verify the internal bytes were zeroed
+	for i, b := range internalRef {
 		if b != 0 {
 			t.Errorf("key byte %d not zeroed: got %d", i, b)
 		}
@@ -283,11 +306,9 @@ func TestStaticKeyProviderDestroyWithOldKeys(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Get references before destroy
-	currentKey, _ := p.CurrentKey()
-	oldKey, _ := p.KeyByID("key-1")
-	currentRef := currentKey.Bytes
-	oldRef := oldKey.Bytes
+	// Hold references to internal backing arrays before destroy
+	currentRef := p.current.Bytes
+	oldRef := p.keys["key-1"].Bytes
 
 	p.Destroy()
 
