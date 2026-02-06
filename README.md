@@ -5,6 +5,7 @@
 [![Go Report Card](https://goreportcard.com/badge/github.com/rbaliyan/config-crypto)](https://goreportcard.com/report/github.com/rbaliyan/config-crypto)
 [![Release](https://img.shields.io/github/v/release/rbaliyan/config-crypto)](https://github.com/rbaliyan/config-crypto/releases/latest)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](https://opensource.org/licenses/MIT)
+[![OpenSSF Scorecard](https://api.scorecard.dev/projects/github.com/rbaliyan/config-crypto/badge)](https://scorecard.dev/viewer/?uri=github.com/rbaliyan/config-crypto)
 
 Encryption codec for the [config](https://github.com/rbaliyan/config) library. Provides transparent encryption of configuration values using AES-256-GCM with envelope encryption.
 
