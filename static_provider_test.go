@@ -255,56 +255,29 @@ func TestWithOldKeyDuplicateID(t *testing.T) {
 		old2[i] = byte(i + 200)
 	}
 
-	// Same key ID for two different old keys — last write wins
-	p, err := NewStaticKeyProvider(current, "current",
+	// Same key ID for two different old keys — should be rejected
+	_, err := NewStaticKeyProvider(current, "current",
 		WithOldKey(old1, "old-key"),
 		WithOldKey(old2, "old-key"),
 	)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	got, err := p.KeyByID("old-key")
-	if err != nil {
-		t.Fatal(err)
-	}
-	// Should have old2's bytes (last write)
-	if got.Bytes[0] != byte(200) {
-		t.Errorf("expected last-write-wins: got first byte %d, want %d", got.Bytes[0], 200)
+	if !IsInvalidKeyID(err) {
+		t.Errorf("expected ErrInvalidKeyID for duplicate old key ID, got %v", err)
 	}
 }
 
-func TestWithOldKeyOverwritesCurrent(t *testing.T) {
+func TestWithOldKeySameIDAsCurrent(t *testing.T) {
 	current := makeKey(32)
 	old := make([]byte, 32)
 	for i := range old {
 		old[i] = byte(i + 100)
 	}
 
-	// Old key with same ID as current — overwrites in the keys map
-	p, err := NewStaticKeyProvider(current, "key-1",
+	// Old key with same ID as current — should be rejected
+	_, err := NewStaticKeyProvider(current, "key-1",
 		WithOldKey(old, "key-1"),
 	)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	// CurrentKey() returns the current field, not from the map
-	ck, err := p.CurrentKey()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if ck.Bytes[0] != 0 {
-		t.Errorf("current key should be original: got first byte %d", ck.Bytes[0])
-	}
-
-	// KeyByID returns from the map — which was overwritten by WithOldKey
-	got, err := p.KeyByID("key-1")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got.Bytes[0] != byte(100) {
-		t.Errorf("KeyByID should return old key bytes: got first byte %d, want %d", got.Bytes[0], 100)
+	if !IsInvalidKeyID(err) {
+		t.Errorf("expected ErrInvalidKeyID for old key matching current ID, got %v", err)
 	}
 }
 

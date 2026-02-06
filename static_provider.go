@@ -33,6 +33,10 @@ func WithOldKey(keyBytes []byte, id string) StaticOption {
 			p.err = fmt.Errorf("%w: old key ID must not be empty", ErrInvalidKeyID)
 			return
 		}
+		if _, exists := p.keys[id]; exists {
+			p.err = fmt.Errorf("%w: duplicate key ID %q", ErrInvalidKeyID, id)
+			return
+		}
 		b := make([]byte, aesKeySize)
 		copy(b, keyBytes)
 		p.keys[id] = Key{ID: id, Bytes: b}
