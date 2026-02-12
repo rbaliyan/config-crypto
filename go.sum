@@ -2,8 +2,8 @@ github.com/BurntSushi/toml v1.6.0 h1:dRaEfpa2VI55EwlIW72hMRHdWouJeRF7TPYhI+AUQjk
 github.com/BurntSushi/toml v1.6.0/go.mod h1:ukJfTF/6rtPPRCnwkur4qwRxa8vTRFBF0uk2lLoLwho=
 github.com/hashicorp/golang-lru/v2 v2.0.7 h1:a+bsQ5rvGLjzHuww6tVxozPZFVghXaHOwFs4luLUK2k=
 github.com/hashicorp/golang-lru/v2 v2.0.7/go.mod h1:QeFd9opnmA6QUJc5vARoKUSoFhyfM2/ZepoAG6RGpeM=
-github.com/rbaliyan/config v0.2.5 h1:3J8uVC83z/f3OLhgYYBGam6wwHLQ+3+Q4rO0JNcdkdk=
-github.com/rbaliyan/config v0.2.5/go.mod h1:tpRMxhC6QKcaidyJGGlD1OfgBCJUWYmtUOLeaKsXi3U=
+github.com/rbaliyan/config v0.3.0 h1:yi9UTT96IABZ0TG8m/+Nxr6oL2RbZr9a3c0omxHo2bg=
+github.com/rbaliyan/config v0.3.0/go.mod h1:hLoDY4DAL+fqSn+icM7jkoL5yNSrnXnhjefLYJtyieM=
 gopkg.in/check.v1 v0.0.0-20161208181325-20d25e280405 h1:yhCVgyC4o1eVCa2tZl7eS0r+SDo693bJlVdllGtEeKM=
 gopkg.in/check.v1 v0.0.0-20161208181325-20d25e280405/go.mod h1:Co6ibVJAznAaIkqp8huTwlJQCZ016jof/cbN4VW5Yz0=
 gopkg.in/yaml.v3 v3.0.1 h1:fxVm/GzAzEWqLHuvctI91KS9hhNmmWOoWu0XTYJS7CA=

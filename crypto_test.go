@@ -26,7 +26,11 @@ func testProvider(t *testing.T) *StaticKeyProvider {
 
 func testCodec(t *testing.T) *Codec {
 	t.Helper()
-	return NewCodec(codec.JSON(), testProvider(t))
+	c, err := NewCodec(codec.JSON(), testProvider(t))
+	if err != nil {
+		t.Fatalf("NewCodec: %v", err)
+	}
+	return c
 }
 
 func TestCodecName(t *testing.T) {
@@ -131,7 +135,10 @@ func TestCodecKeyRotation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	oldCodec := NewCodec(codec.JSON(), oldProvider)
+	oldCodec, err := NewCodec(codec.JSON(), oldProvider)
+	if err != nil {
+		t.Fatalf("NewCodec: %v", err)
+	}
 
 	data, err := oldCodec.Encode("secret")
 	if err != nil {
@@ -145,7 +152,10 @@ func TestCodecKeyRotation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	newCodec := NewCodec(codec.JSON(), newProvider)
+	newCodec, err := NewCodec(codec.JSON(), newProvider)
+	if err != nil {
+		t.Fatalf("NewCodec: %v", err)
+	}
 
 	var got string
 	if err := newCodec.Decode(data, &got); err != nil {
@@ -173,7 +183,10 @@ func TestCodecWrongKey(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	wrongCodec := NewCodec(codec.JSON(), wrongProvider)
+	wrongCodec, err := NewCodec(codec.JSON(), wrongProvider)
+	if err != nil {
+		t.Fatalf("NewCodec: %v", err)
+	}
 
 	var got string
 	err = wrongCodec.Decode(data, &got)
@@ -318,8 +331,13 @@ func TestCodecIntegrationWithMemoryStore(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	encJSON := NewCodec(codec.JSON(), provider)
-	codec.Register(encJSON)
+	encJSON, err := NewCodec(codec.JSON(), provider)
+	if err != nil {
+		t.Fatalf("NewCodec: %v", err)
+	}
+	if err := codec.Register(encJSON); err != nil {
+		t.Fatalf("Register: %v", err)
+	}
 
 	// Create a memory store
 	store := memory.NewStore()
@@ -374,24 +392,18 @@ func TestCodecIntegrationWithMemoryStore(t *testing.T) {
 
 // --- New tests for uncovered error paths ---
 
-func TestNewCodecPanicsOnNilInner(t *testing.T) {
-	defer func() {
-		r := recover()
-		if r == nil {
-			t.Error("expected panic for nil inner codec")
-		}
-	}()
-	NewCodec(nil, testProvider(t))
+func TestNewCodecReturnsErrorOnNilInner(t *testing.T) {
+	_, err := NewCodec(nil, testProvider(t))
+	if err == nil {
+		t.Error("expected error for nil inner codec")
+	}
 }
 
-func TestNewCodecPanicsOnNilProvider(t *testing.T) {
-	defer func() {
-		r := recover()
-		if r == nil {
-			t.Error("expected panic for nil provider")
-		}
-	}()
-	NewCodec(codec.JSON(), nil)
+func TestNewCodecReturnsErrorOnNilProvider(t *testing.T) {
+	_, err := NewCodec(codec.JSON(), nil)
+	if err == nil {
+		t.Error("expected error for nil provider")
+	}
 }
 
 // failingProvider is a KeyProvider that always returns errors.
@@ -406,9 +418,12 @@ func (p *failingProvider) KeyByID(id string) (Key, error) {
 }
 
 func TestCodecEncodeCurrentKeyFailure(t *testing.T) {
-	c := NewCodec(codec.JSON(), &failingProvider{})
+	c, err := NewCodec(codec.JSON(), &failingProvider{})
+	if err != nil {
+		t.Fatalf("NewCodec: %v", err)
+	}
 
-	_, err := c.Encode("test")
+	_, err = c.Encode("test")
 	if err == nil {
 		t.Error("expected error when CurrentKey fails")
 	}
