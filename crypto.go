@@ -23,19 +23,19 @@ var _ codec.Codec = (*Codec)(nil)
 
 // NewCodec creates an encrypting codec that wraps the given inner codec.
 // The codec name is "encrypted:<inner>", e.g. "encrypted:json".
-// Panics if inner or provider is nil.
-func NewCodec(inner codec.Codec, provider KeyProvider) *Codec {
+// Returns an error if inner or provider is nil.
+func NewCodec(inner codec.Codec, provider KeyProvider) (*Codec, error) {
 	if inner == nil {
-		panic("crypto: NewCodec inner codec is nil")
+		return nil, fmt.Errorf("crypto: NewCodec inner codec is nil")
 	}
 	if provider == nil {
-		panic("crypto: NewCodec provider is nil")
+		return nil, fmt.Errorf("crypto: NewCodec provider is nil")
 	}
 	return &Codec{
 		inner:    inner,
 		provider: provider,
 		name:     "encrypted:" + inner.Name(),
-	}
+	}, nil
 }
 
 // Name returns the codec name, e.g. "encrypted:json".

@@ -20,7 +20,10 @@ func ExampleNewCodec() {
 	}
 
 	// Wrap the JSON codec with encryption
-	encJSON := crypto.NewCodec(codec.JSON(), provider)
+	encJSON, err := crypto.NewCodec(codec.JSON(), provider)
+	if err != nil {
+		panic(err)
+	}
 	fmt.Println("Codec name:", encJSON.Name())
 
 	// Encode encrypts the JSON-serialized value
@@ -56,7 +59,10 @@ func ExampleNewCodec_withConfig() {
 	}
 
 	// Create and register the encrypted codec
-	encJSON := crypto.NewCodec(codec.JSON(), provider)
+	encJSON, err := crypto.NewCodec(codec.JSON(), provider)
+	if err != nil {
+		panic(err)
+	}
 	codec.Register(encJSON)
 
 	// Now "encrypted:json" is available in the codec registry
@@ -79,7 +85,10 @@ func ExampleNewStaticKeyProvider_rotation() {
 	if err != nil {
 		panic(err)
 	}
-	oldCodec := crypto.NewCodec(codec.JSON(), oldProvider)
+	oldCodec, err := crypto.NewCodec(codec.JSON(), oldProvider)
+	if err != nil {
+		panic(err)
+	}
 
 	encrypted, err := oldCodec.Encode("secret-data")
 	if err != nil {
@@ -98,7 +107,10 @@ func ExampleNewStaticKeyProvider_rotation() {
 	if err != nil {
 		panic(err)
 	}
-	newCodec := crypto.NewCodec(codec.JSON(), newProvider)
+	newCodec, err := crypto.NewCodec(codec.JSON(), newProvider)
+	if err != nil {
+		panic(err)
+	}
 
 	// Can decrypt data encrypted with old key
 	var result string

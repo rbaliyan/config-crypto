@@ -13,7 +13,11 @@ func benchmarkCodec(b *testing.B) *Codec {
 	if err != nil {
 		b.Fatal(err)
 	}
-	return NewCodec(codec.JSON(), p)
+	c, err := NewCodec(codec.JSON(), p)
+	if err != nil {
+		b.Fatal(err)
+	}
+	return c
 }
 
 func BenchmarkEncode1KB(b *testing.B) {

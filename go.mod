@@ -2,7 +2,7 @@ module github.com/rbaliyan/config-crypto
 
 go 1.24.2
 
-require github.com/rbaliyan/config v0.2.5
+require github.com/rbaliyan/config v0.3.0
 
 require (
 	github.com/BurntSushi/toml v1.6.0 // indirect
