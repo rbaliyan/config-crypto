@@ -3,7 +3,7 @@ package crypto
 import (
 	"testing"
 
-	"github.com/rbaliyan/config/codec"
+	jsoncodec "github.com/rbaliyan/config/codec/json"
 )
 
 func benchmarkCodec(b *testing.B) *Codec {
@@ -13,7 +13,7 @@ func benchmarkCodec(b *testing.B) *Codec {
 	if err != nil {
 		b.Fatal(err)
 	}
-	c, err := NewCodec(codec.JSON(), p)
+	c, err := NewCodec(jsoncodec.New(), p)
 	if err != nil {
 		b.Fatal(err)
 	}
