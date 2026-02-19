@@ -5,6 +5,7 @@ import (
 
 	crypto "github.com/rbaliyan/config-crypto"
 	"github.com/rbaliyan/config/codec"
+	jsoncodec "github.com/rbaliyan/config/codec/json"
 )
 
 func ExampleNewCodec() {
@@ -20,7 +21,7 @@ func ExampleNewCodec() {
 	}
 
 	// Wrap the JSON codec with encryption
-	encJSON, err := crypto.NewCodec(codec.JSON(), provider)
+	encJSON, err := crypto.NewCodec(jsoncodec.New(), provider)
 	if err != nil {
 		panic(err)
 	}
@@ -59,11 +60,13 @@ func ExampleNewCodec_withConfig() {
 	}
 
 	// Create and register the encrypted codec
-	encJSON, err := crypto.NewCodec(codec.JSON(), provider)
+	encJSON, err := crypto.NewCodec(jsoncodec.New(), provider)
 	if err != nil {
 		panic(err)
 	}
-	codec.Register(encJSON)
+	if err := codec.Register(encJSON); err != nil {
+		panic(err)
+	}
 
 	// Now "encrypted:json" is available in the codec registry
 	resolved := codec.Get("encrypted:json")
@@ -85,7 +88,7 @@ func ExampleNewStaticKeyProvider_rotation() {
 	if err != nil {
 		panic(err)
 	}
-	oldCodec, err := crypto.NewCodec(codec.JSON(), oldProvider)
+	oldCodec, err := crypto.NewCodec(jsoncodec.New(), oldProvider)
 	if err != nil {
 		panic(err)
 	}
@@ -107,7 +110,7 @@ func ExampleNewStaticKeyProvider_rotation() {
 	if err != nil {
 		panic(err)
 	}
-	newCodec, err := crypto.NewCodec(codec.JSON(), newProvider)
+	newCodec, err := crypto.NewCodec(jsoncodec.New(), newProvider)
 	if err != nil {
 		panic(err)
 	}

@@ -11,6 +11,7 @@ import (
 
 	"github.com/rbaliyan/config"
 	"github.com/rbaliyan/config/codec"
+	jsoncodec "github.com/rbaliyan/config/codec/json"
 	"github.com/rbaliyan/config/memory"
 )
 
@@ -26,7 +27,7 @@ func testProvider(t *testing.T) *StaticKeyProvider {
 
 func testCodec(t *testing.T) *Codec {
 	t.Helper()
-	c, err := NewCodec(codec.JSON(), testProvider(t))
+	c, err := NewCodec(jsoncodec.New(), testProvider(t))
 	if err != nil {
 		t.Fatalf("NewCodec: %v", err)
 	}
@@ -135,7 +136,7 @@ func TestCodecKeyRotation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	oldCodec, err := NewCodec(codec.JSON(), oldProvider)
+	oldCodec, err := NewCodec(jsoncodec.New(), oldProvider)
 	if err != nil {
 		t.Fatalf("NewCodec: %v", err)
 	}
@@ -152,7 +153,7 @@ func TestCodecKeyRotation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	newCodec, err := NewCodec(codec.JSON(), newProvider)
+	newCodec, err := NewCodec(jsoncodec.New(), newProvider)
 	if err != nil {
 		t.Fatalf("NewCodec: %v", err)
 	}
@@ -183,7 +184,7 @@ func TestCodecWrongKey(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	wrongCodec, err := NewCodec(codec.JSON(), wrongProvider)
+	wrongCodec, err := NewCodec(jsoncodec.New(), wrongProvider)
 	if err != nil {
 		t.Fatalf("NewCodec: %v", err)
 	}
@@ -331,7 +332,7 @@ func TestCodecIntegrationWithMemoryStore(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	encJSON, err := NewCodec(codec.JSON(), provider)
+	encJSON, err := NewCodec(jsoncodec.New(), provider)
 	if err != nil {
 		t.Fatalf("NewCodec: %v", err)
 	}
@@ -400,7 +401,7 @@ func TestNewCodecReturnsErrorOnNilInner(t *testing.T) {
 }
 
 func TestNewCodecReturnsErrorOnNilProvider(t *testing.T) {
-	_, err := NewCodec(codec.JSON(), nil)
+	_, err := NewCodec(jsoncodec.New(), nil)
 	if err == nil {
 		t.Error("expected error for nil provider")
 	}
@@ -418,7 +419,7 @@ func (p *failingProvider) KeyByID(id string) (Key, error) {
 }
 
 func TestCodecEncodeCurrentKeyFailure(t *testing.T) {
-	c, err := NewCodec(codec.JSON(), &failingProvider{})
+	c, err := NewCodec(jsoncodec.New(), &failingProvider{})
 	if err != nil {
 		t.Fatalf("NewCodec: %v", err)
 	}

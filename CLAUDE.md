@@ -33,7 +33,7 @@ Each value gets a unique random DEK (Data Encryption Key), which is itself encry
 - **DEK zeroing**: ephemeral key material is cleared after use
 - **Defensive copies**: key bytes are copied on construction; header parsing copies slices from input
 - **Key material destruction**: `StaticKeyProvider.Destroy()` zeros all key material and blocks further operations
-- **Input validation**: `NewCodec` panics on nil inputs; `NewStaticKeyProvider` and `WithOldKey` validate key size and ID
+- **Input validation**: `NewCodec` returns an error if inner codec or provider is nil; `NewStaticKeyProvider` and `WithOldKey` validate key size and ID
 
 ### Binary Format (v1)
 
