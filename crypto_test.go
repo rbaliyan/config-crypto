@@ -41,6 +41,49 @@ func TestCodecName(t *testing.T) {
 	}
 }
 
+func TestWithClientCodec(t *testing.T) {
+	c, err := NewCodec(jsoncodec.New(), testProvider(t), WithClientCodec())
+	if err != nil {
+		t.Fatalf("NewCodec: %v", err)
+	}
+	if c.Name() != "client:encrypted:json" {
+		t.Errorf("Name() = %q, want %q", c.Name(), "client:encrypted:json")
+	}
+
+	// Encode/Decode should still work.
+	data, err := c.Encode("hello")
+	if err != nil {
+		t.Fatalf("Encode: %v", err)
+	}
+	var got string
+	if err := c.Decode(data, &got); err != nil {
+		t.Fatalf("Decode: %v", err)
+	}
+	if got != "hello" {
+		t.Errorf("Decode: got %q, want %q", got, "hello")
+	}
+}
+
+func TestWithCodecPrefix(t *testing.T) {
+	c, err := NewCodec(jsoncodec.New(), testProvider(t), WithCodecPrefix("custom"))
+	if err != nil {
+		t.Fatalf("NewCodec: %v", err)
+	}
+	if c.Name() != "custom:encrypted:json" {
+		t.Errorf("Name() = %q, want %q", c.Name(), "custom:encrypted:json")
+	}
+}
+
+func TestWithoutClientCodec(t *testing.T) {
+	c, err := NewCodec(jsoncodec.New(), testProvider(t))
+	if err != nil {
+		t.Fatalf("NewCodec: %v", err)
+	}
+	if c.Name() != "encrypted:json" {
+		t.Errorf("Name() = %q, want %q", c.Name(), "encrypted:json")
+	}
+}
+
 func TestCodecRoundTripString(t *testing.T) {
 	c := testCodec(t)
 
