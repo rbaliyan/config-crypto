@@ -18,8 +18,11 @@ type Codec struct {
 	name     string
 }
 
-// Compile-time interface check.
-var _ codec.Codec = (*Codec)(nil)
+// Compile-time interface checks.
+var (
+	_ codec.Codec       = (*Codec)(nil)
+	_ codec.Transformer = (*Codec)(nil)
+)
 
 // Option configures NewCodec behavior.
 type Option func(*codecOptions)
@@ -104,4 +107,20 @@ func (c *Codec) Decode(data []byte, v any) error {
 		return fmt.Errorf("crypto: inner decode failed: %w", err)
 	}
 	return nil
+}
+
+// Transform encrypts the raw bytes using envelope encryption.
+// This implements codec.Transformer for use with codec.NewChain.
+func (c *Codec) Transform(data []byte) ([]byte, error) {
+	key, err := c.provider.CurrentKey()
+	if err != nil {
+		return nil, fmt.Errorf("crypto: failed to get current key: %w", err)
+	}
+	return encrypt(data, key)
+}
+
+// Reverse decrypts the raw bytes, recovering the original plaintext.
+// This implements codec.Transformer for use with codec.NewChain.
+func (c *Codec) Reverse(data []byte) ([]byte, error) {
+	return decrypt(data, c.provider)
 }
