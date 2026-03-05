@@ -41,6 +41,49 @@ func TestCodecName(t *testing.T) {
 	}
 }
 
+func TestWithClientCodec(t *testing.T) {
+	c, err := NewCodec(jsoncodec.New(), testProvider(t), WithClientCodec())
+	if err != nil {
+		t.Fatalf("NewCodec: %v", err)
+	}
+	if c.Name() != "client:encrypted:json" {
+		t.Errorf("Name() = %q, want %q", c.Name(), "client:encrypted:json")
+	}
+
+	// Encode/Decode should still work.
+	data, err := c.Encode("hello")
+	if err != nil {
+		t.Fatalf("Encode: %v", err)
+	}
+	var got string
+	if err := c.Decode(data, &got); err != nil {
+		t.Fatalf("Decode: %v", err)
+	}
+	if got != "hello" {
+		t.Errorf("Decode: got %q, want %q", got, "hello")
+	}
+}
+
+func TestWithCodecPrefix(t *testing.T) {
+	c, err := NewCodec(jsoncodec.New(), testProvider(t), WithCodecPrefix("custom"))
+	if err != nil {
+		t.Fatalf("NewCodec: %v", err)
+	}
+	if c.Name() != "custom:encrypted:json" {
+		t.Errorf("Name() = %q, want %q", c.Name(), "custom:encrypted:json")
+	}
+}
+
+func TestWithoutClientCodec(t *testing.T) {
+	c, err := NewCodec(jsoncodec.New(), testProvider(t))
+	if err != nil {
+		t.Fatalf("NewCodec: %v", err)
+	}
+	if c.Name() != "encrypted:json" {
+		t.Errorf("Name() = %q, want %q", c.Name(), "encrypted:json")
+	}
+}
+
 func TestCodecRoundTripString(t *testing.T) {
 	c := testCodec(t)
 
@@ -624,6 +667,74 @@ func TestWriteHeaderKeyIDTooLong(t *testing.T) {
 	err := writeHeader(&buf, h)
 	if !IsInvalidFormat(err) {
 		t.Errorf("expected ErrInvalidFormat for key ID > 255 bytes, got %v", err)
+	}
+}
+
+func TestTransformReverseRoundTrip(t *testing.T) {
+	c := testCodec(t)
+
+	plaintext := []byte("hello transform")
+	encrypted, err := c.Transform(plaintext)
+	if err != nil {
+		t.Fatalf("Transform: %v", err)
+	}
+	if bytes.Equal(encrypted, plaintext) {
+		t.Error("Transform did not change the data")
+	}
+
+	got, err := c.Reverse(encrypted)
+	if err != nil {
+		t.Fatalf("Reverse: %v", err)
+	}
+	if !bytes.Equal(got, plaintext) {
+		t.Errorf("Reverse: got %q, want %q", got, plaintext)
+	}
+}
+
+func TestTransformCurrentKeyFailure(t *testing.T) {
+	c, err := NewCodec(jsoncodec.New(), &failingProvider{})
+	if err != nil {
+		t.Fatalf("NewCodec: %v", err)
+	}
+
+	_, err = c.Transform([]byte("test"))
+	if err == nil {
+		t.Error("expected error when CurrentKey fails")
+	}
+	if !strings.Contains(err.Error(), "failed to get current key") {
+		t.Errorf("unexpected error message: %v", err)
+	}
+}
+
+func TestChainWithCryptoTransformer(t *testing.T) {
+	cryptoCodec := testCodec(t)
+	chained := codec.NewChain(jsoncodec.New(), cryptoCodec)
+
+	if chained.Name() != "encrypted:json:json" {
+		t.Errorf("Name() = %q, want %q", chained.Name(), "encrypted:json:json")
+	}
+
+	type Payload struct {
+		Secret string `json:"secret"`
+	}
+
+	original := Payload{Secret: "my-api-key"}
+	data, err := chained.Encode(original)
+	if err != nil {
+		t.Fatalf("Encode: %v", err)
+	}
+
+	// Encrypted data should not contain plaintext.
+	if bytes.Contains(data, []byte("my-api-key")) {
+		t.Error("chain-encoded data contains plaintext")
+	}
+
+	var got Payload
+	if err := chained.Decode(data, &got); err != nil {
+		t.Fatalf("Decode: %v", err)
+	}
+	if got != original {
+		t.Errorf("round-trip: got %+v, want %+v", got, original)
 	}
 }
 

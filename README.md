@@ -96,6 +96,39 @@ codec.Register(encJSON)
 // Writes use the new key
 ```
 
+### Dynamic Key Rotation
+
+`DynamicKeyProvider` supports runtime key rotation without restarting the application. Keys can be added, removed, and the current key switched at any time:
+
+```go
+provider, _ := crypto.NewDynamicKeyProvider(initialKey, "key-v1")
+
+// Add a new key and switch to it
+provider.AddKey(newKey, "key-v2")
+provider.SetCurrentKeyID("key-v2")
+
+// Remove old key when no longer needed for decryption
+provider.RemoveKey("key-v1")
+```
+
+#### Watch-Based Auto-Rotation
+
+Combine with a config store to rotate keys automatically when a config value changes:
+
+```go
+// Watch the "internal:config:crypto" namespace for key ID changes
+cancel, err := provider.WatchKeyRotation(ctx, store,
+    "internal:config:crypto", "key/current-id")
+if err != nil {
+    return err
+}
+defer cancel()
+
+// When store value at key/current-id changes to "key-v2",
+// the provider automatically switches to that key.
+// All referenced key IDs must be pre-loaded via AddKey.
+```
+
 ### Full Re-encryption
 
 To re-encrypt all values with the new key:
