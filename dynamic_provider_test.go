@@ -425,4 +425,3 @@ func TestWithDynamicOldKeyDuplicateID(t *testing.T) {
 		t.Errorf("expected ErrInvalidKeyID for duplicate, got %v", err)
 	}
 }
-
