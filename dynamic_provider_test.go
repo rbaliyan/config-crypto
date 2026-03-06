@@ -169,8 +169,8 @@ func TestDynamicKeyProviderRemoveCurrentKeyFails(t *testing.T) {
 	}
 
 	err = p.RemoveKey("key-1")
-	if err == nil {
-		t.Fatal("expected error removing current key")
+	if !IsRemoveCurrentKey(err) {
+		t.Errorf("expected ErrRemoveCurrentKey, got %v", err)
 	}
 }
 
