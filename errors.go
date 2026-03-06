@@ -20,6 +20,9 @@ var (
 
 	// ErrProviderDestroyed is returned when a provider has been destroyed.
 	ErrProviderDestroyed = errors.New("crypto: provider has been destroyed")
+
+	// ErrRemoveCurrentKey is returned when attempting to remove the active encryption key.
+	ErrRemoveCurrentKey = errors.New("crypto: cannot remove current key")
 )
 
 // IsKeyNotFound returns true if the error is or wraps ErrKeyNotFound.
@@ -50,4 +53,9 @@ func IsInvalidKeyID(err error) bool {
 // IsProviderDestroyed returns true if the error is or wraps ErrProviderDestroyed.
 func IsProviderDestroyed(err error) bool {
 	return errors.Is(err, ErrProviderDestroyed)
+}
+
+// IsRemoveCurrentKey returns true if the error is or wraps ErrRemoveCurrentKey.
+func IsRemoveCurrentKey(err error) bool {
+	return errors.Is(err, ErrRemoveCurrentKey)
 }

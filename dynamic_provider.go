@@ -15,11 +15,12 @@ import (
 //
 // DynamicKeyProvider is safe for concurrent use.
 type DynamicKeyProvider struct {
-	mu        sync.RWMutex
-	current   Key
-	keys      map[string]Key
-	err       error // deferred validation error from options
-	destroyed bool
+	mu          sync.RWMutex
+	current     Key
+	keys        map[string]Key
+	cancelWatch context.CancelFunc // cancel function from WatchKeyRotation
+	err         error              // deferred validation error from options
+	destroyed   bool
 }
 
 // DynamicOption configures a DynamicKeyProvider.
@@ -158,7 +159,7 @@ func (p *DynamicKeyProvider) RemoveKey(id string) error {
 	}
 
 	if p.current.ID == id {
-		return fmt.Errorf("crypto: cannot remove current key %q", id)
+		return fmt.Errorf("%w: %s", ErrRemoveCurrentKey, id)
 	}
 
 	key, ok := p.keys[id]
@@ -186,6 +187,11 @@ func (p *DynamicKeyProvider) WatchKeyRotation(ctx context.Context, store config.
 		cancel()
 		return nil, fmt.Errorf("crypto: failed to watch store: %w", err)
 	}
+
+	// Store cancel so Destroy can stop the goroutine.
+	p.mu.Lock()
+	p.cancelWatch = cancel
+	p.mu.Unlock()
 
 	go func() {
 		for event := range ch {
@@ -216,6 +222,10 @@ func (p *DynamicKeyProvider) WatchKeyRotation(ctx context.Context, store config.
 func (p *DynamicKeyProvider) Destroy() {
 	p.mu.Lock()
 	defer p.mu.Unlock()
+	if p.cancelWatch != nil {
+		p.cancelWatch()
+		p.cancelWatch = nil
+	}
 	for _, k := range p.keys {
 		clear(k.Bytes)
 	}
