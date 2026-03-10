@@ -1,6 +1,6 @@
 module github.com/rbaliyan/config-crypto/awskms
 
-go 1.24.2
+go 1.25.8
 
 require (
 	github.com/aws/aws-sdk-go-v2/service/kms v1.50.1

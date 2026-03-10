@@ -1,6 +1,6 @@
 module github.com/rbaliyan/config-crypto/gcpkms
 
-go 1.24.2
+go 1.25.8
 
 require (
 	cloud.google.com/go/kms v1.26.0
