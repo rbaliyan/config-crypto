@@ -1,6 +1,6 @@
 module github.com/rbaliyan/config-crypto/azurekv
 
-go 1.24.2
+go 1.25.8
 
 require (
 	github.com/Azure/azure-sdk-for-go/sdk/security/keyvault/azkeys v1.4.0

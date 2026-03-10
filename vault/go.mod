@@ -1,6 +1,6 @@
 module github.com/rbaliyan/config-crypto/vault
 
-go 1.24.2
+go 1.25.8
 
 require github.com/rbaliyan/config-crypto v0.2.4
 
