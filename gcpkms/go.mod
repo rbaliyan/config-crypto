@@ -4,12 +4,13 @@ go 1.24.2
 
 require (
 	cloud.google.com/go/kms v1.26.0
-	github.com/rbaliyan/config-crypto v0.2.1
+	github.com/rbaliyan/config-crypto v0.2.4
 )
 
 require (
 	cloud.google.com/go/longrunning v0.8.0 // indirect
-	github.com/rbaliyan/config v0.4.3 // indirect
+	github.com/hashicorp/golang-lru/v2 v2.0.7 // indirect
+	github.com/rbaliyan/config v0.5.1 // indirect
 	golang.org/x/net v0.49.0 // indirect
 	golang.org/x/sys v0.40.0 // indirect
 	golang.org/x/text v0.33.0 // indirect
