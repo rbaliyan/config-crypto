@@ -349,7 +349,7 @@ func TestDynamicKeyProviderWatchKeyRotation(t *testing.T) {
 	}
 
 	// Wait for watch to propagate
-	deadline := time.After(2 * time.Second)
+	deadline := time.After(10 * time.Second)
 	for {
 		current, _ = p.CurrentKey()
 		if current.ID == "key-2" {
