@@ -103,10 +103,13 @@ func (p *StaticKeyProvider) KeyByID(id string) (Key, error) {
 
 // Destroy zeros all key material held by this provider.
 // After Destroy is called, CurrentKey and KeyByID return ErrProviderDestroyed.
-// Safe for concurrent use.
+// Safe for concurrent use. Safe to call multiple times; subsequent calls are no-ops.
 func (p *StaticKeyProvider) Destroy() {
 	p.mu.Lock()
 	defer p.mu.Unlock()
+	if p.destroyed {
+		return
+	}
 	for _, k := range p.keys {
 		clear(k.Bytes)
 	}
