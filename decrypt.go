@@ -24,6 +24,7 @@ func decrypt(data []byte, provider KeyProvider) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
+	defer clear(kek.Bytes)
 
 	if len(kek.Bytes) != aesKeySize {
 		return nil, fmt.Errorf("%w: got %d bytes", ErrInvalidKeySize, len(kek.Bytes))
