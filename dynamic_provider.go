@@ -3,6 +3,7 @@ package crypto
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"sync"
 
 	"github.com/rbaliyan/config"
@@ -225,8 +226,12 @@ func (p *DynamicKeyProvider) WatchKeyRotation(ctx context.Context, store config.
 				continue
 			}
 
-			if err := p.SetCurrentKeyID(newKeyID); err != nil && onErr != nil {
-				onErr(err)
+			if err := p.SetCurrentKeyID(newKeyID); err != nil {
+				if onErr != nil {
+					onErr(err)
+				} else {
+					slog.Default().Warn("crypto: key rotation failed", "key_id", newKeyID, "error", err)
+				}
 			}
 		}
 	}()
