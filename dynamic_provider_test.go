@@ -425,3 +425,92 @@ func TestWithDynamicOldKeyDuplicateID(t *testing.T) {
 		t.Errorf("expected ErrInvalidKeyID for duplicate, got %v", err)
 	}
 }
+
+func TestWithOnRotationError(t *testing.T) {
+	store := memory.NewStore()
+	ctx := context.Background()
+	if err := store.Connect(ctx); err != nil {
+		t.Fatalf("Connect: %v", err)
+	}
+	defer store.Close(ctx)
+
+	var mu sync.Mutex
+	var gotErr error
+	p, err := NewDynamicKeyProvider(makeKey(32), "key-1",
+		WithOnRotationError(func(e error) {
+			mu.Lock()
+			gotErr = e
+			mu.Unlock()
+		}),
+	)
+	if err != nil {
+		t.Fatalf("NewDynamicKeyProvider: %v", err)
+	}
+	defer p.Destroy()
+
+	cancel, err := p.WatchKeyRotation(ctx, store, "crypto", "active-key")
+	if err != nil {
+		t.Fatalf("WatchKeyRotation: %v", err)
+	}
+	defer cancel()
+
+	// Set a key ID that is not registered — should trigger the callback.
+	val := config.NewValue("key-99")
+	if _, err := store.Set(ctx, "crypto", "active-key", val); err != nil {
+		t.Fatalf("Set: %v", err)
+	}
+
+	// Wait for the watch goroutine to process the event.
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		mu.Lock()
+		e := gotErr
+		mu.Unlock()
+		if e != nil {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	if gotErr == nil {
+		t.Fatal("expected rotation error callback, got none")
+	}
+	if !IsKeyNotFound(gotErr) {
+		t.Errorf("expected ErrKeyNotFound, got %v", gotErr)
+	}
+}
+
+func TestWatchKeyRotation_SlogFallback(t *testing.T) {
+	// When no WithOnRotationError callback is set, rotation errors must not
+	// panic and must not be silently dropped (they log via slog.Default).
+	store := memory.NewStore()
+	ctx := context.Background()
+	if err := store.Connect(ctx); err != nil {
+		t.Fatalf("Connect: %v", err)
+	}
+	defer store.Close(ctx)
+
+	p, err := NewDynamicKeyProvider(makeKey(32), "key-1")
+	if err != nil {
+		t.Fatalf("NewDynamicKeyProvider: %v", err)
+	}
+	defer p.Destroy()
+
+	cancel, err := p.WatchKeyRotation(ctx, store, "crypto", "active-key")
+	if err != nil {
+		t.Fatalf("WatchKeyRotation: %v", err)
+	}
+	defer cancel()
+
+	// Trigger a rotation error (unregistered key ID). The fallback slog call
+	// must not panic; if it does, the test will fail with a goroutine panic.
+	val := config.NewValue("unregistered-key")
+	if _, err := store.Set(ctx, "crypto", "active-key", val); err != nil {
+		t.Fatalf("Set: %v", err)
+	}
+
+	// Give the watch goroutine time to process the event.
+	time.Sleep(100 * time.Millisecond)
+}

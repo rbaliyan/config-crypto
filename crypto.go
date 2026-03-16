@@ -92,6 +92,7 @@ func (c *Codec) Encode(v any) ([]byte, error) {
 	if err != nil {
 		return nil, fmt.Errorf("crypto: failed to get current key: %w", err)
 	}
+	defer clear(key.Bytes)
 
 	return encrypt(plaintext, key)
 }
@@ -116,6 +117,7 @@ func (c *Codec) Transform(data []byte) ([]byte, error) {
 	if err != nil {
 		return nil, fmt.Errorf("crypto: failed to get current key: %w", err)
 	}
+	defer clear(key.Bytes)
 	return encrypt(data, key)
 }
 
