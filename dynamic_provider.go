@@ -15,16 +15,27 @@ import (
 //
 // DynamicKeyProvider is safe for concurrent use.
 type DynamicKeyProvider struct {
-	mu          sync.RWMutex
-	current     Key
-	keys        map[string]Key
-	cancelWatch context.CancelFunc // cancel function from WatchKeyRotation
-	err         error              // deferred validation error from options
-	destroyed   bool
+	mu              sync.RWMutex
+	current         Key
+	keys            map[string]Key
+	cancelWatch     context.CancelFunc // cancel function from WatchKeyRotation
+	onRotationError func(error)        // optional callback for rotation errors
+	err             error              // deferred validation error from options
+	destroyed       bool
 }
 
 // DynamicOption configures a DynamicKeyProvider.
 type DynamicOption func(*DynamicKeyProvider)
+
+// WithOnRotationError sets a callback invoked when WatchKeyRotation fails to
+// apply a new key ID (e.g. the key was not yet registered via AddKey).
+// The callback is invoked from a background goroutine; it must be safe for
+// concurrent use and must not call back into this provider.
+func WithOnRotationError(fn func(error)) DynamicOption {
+	return func(p *DynamicKeyProvider) {
+		p.onRotationError = fn
+	}
+}
 
 // WithDynamicOldKey adds a previous key for decryption during key rotation.
 // The keyBytes must be 32 bytes for AES-256 and id must not be empty.
@@ -188,9 +199,13 @@ func (p *DynamicKeyProvider) WatchKeyRotation(ctx context.Context, store config.
 		return nil, fmt.Errorf("crypto: failed to watch store: %w", err)
 	}
 
-	// Store cancel so Destroy can stop the goroutine.
+	// Cancel any existing watch before registering the new one to prevent goroutine leaks.
 	p.mu.Lock()
+	if p.cancelWatch != nil {
+		p.cancelWatch()
+	}
 	p.cancelWatch = cancel
+	onErr := p.onRotationError
 	p.mu.Unlock()
 
 	go func() {
@@ -210,7 +225,9 @@ func (p *DynamicKeyProvider) WatchKeyRotation(ctx context.Context, store config.
 				continue
 			}
 
-			_ = p.SetCurrentKeyID(newKeyID)
+			if err := p.SetCurrentKeyID(newKeyID); err != nil && onErr != nil {
+				onErr(err)
+			}
 		}
 	}()
 
@@ -219,9 +236,13 @@ func (p *DynamicKeyProvider) WatchKeyRotation(ctx context.Context, store config.
 
 // Destroy zeros all key material held by this provider.
 // After Destroy is called, all methods return ErrProviderDestroyed.
+// Safe to call multiple times; subsequent calls are no-ops.
 func (p *DynamicKeyProvider) Destroy() {
 	p.mu.Lock()
 	defer p.mu.Unlock()
+	if p.destroyed {
+		return
+	}
 	if p.cancelWatch != nil {
 		p.cancelWatch()
 		p.cancelWatch = nil
