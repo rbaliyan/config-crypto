@@ -30,6 +30,11 @@ const (
 
 	// minHeaderSize is the minimum header size: magic(2) + version(1) + alg(1) + keyIDLen(1).
 	minHeaderSize = 5
+
+	// maxKeyIDLen is the maximum key ID length in bytes, matching the on-wire
+	// field size (1 byte, 0–255). Used as an explicit upper-bound guard in
+	// readHeader to document the constraint and prevent future regressions.
+	maxKeyIDLen = 255
 )
 
 // header represents the parsed header of an encrypted payload.
@@ -56,8 +61,8 @@ func writeHeader(w io.Writer, h *header) error {
 
 	// Version + Algorithm + Key ID length
 	keyIDBytes := []byte(h.keyID)
-	if len(keyIDBytes) > 255 {
-		return fmt.Errorf("%w: key ID too long", ErrInvalidFormat)
+	if len(keyIDBytes) > maxKeyIDLen {
+		return fmt.Errorf("%w: key ID too long (%d bytes, max %d)", ErrInvalidFormat, len(keyIDBytes), maxKeyIDLen)
 	}
 	meta := []byte{h.version, h.algorithm, byte(len(keyIDBytes))}
 	if _, err := w.Write(meta); err != nil {
@@ -116,6 +121,12 @@ func readHeader(data []byte) (*header, []byte, error) {
 
 	keyIDLen := int(data[4])
 	offset := minHeaderSize
+
+	// keyIDLen is a uint8 on the wire (0–255); maxKeyIDLen == 255 so this check
+	// serves as an explicit guard rather than a reachable error path.
+	if keyIDLen > maxKeyIDLen {
+		return nil, nil, fmt.Errorf("%w: key ID too long (%d bytes, max %d)", ErrInvalidFormat, keyIDLen, maxKeyIDLen)
+	}
 
 	// Ensure enough data for key ID + DEK nonce + encrypted DEK + data nonce
 	needed := keyIDLen + gcmNonceSize + encryptedDEKSize + gcmNonceSize

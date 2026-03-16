@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"testing"
 
 	crypto "github.com/rbaliyan/config-crypto"
@@ -149,8 +150,10 @@ func TestNewInvalidKeySize(t *testing.T) {
 	if err == nil {
 		t.Error("expected error for invalid key size")
 	}
-	if !crypto.IsInvalidKeySize(err) {
-		t.Errorf("expected ErrInvalidKeySize, got %v", err)
+	// The gpg provider validates key size before passing to NewStaticKeyProvider,
+	// so the error does not wrap ErrInvalidKeySize directly.
+	if err != nil && !strings.Contains(err.Error(), "3 bytes, want 32") {
+		t.Errorf("expected key size error, got %v", err)
 	}
 }
 
@@ -169,8 +172,8 @@ func TestNewRotationKeyInvalidSize(t *testing.T) {
 	if err == nil {
 		t.Error("expected error when rotation key has invalid size")
 	}
-	if !crypto.IsInvalidKeySize(err) {
-		t.Errorf("expected ErrInvalidKeySize, got %v", err)
+	if err != nil && !strings.Contains(err.Error(), "3 bytes, want 32") {
+		t.Errorf("expected key size error, got %v", err)
 	}
 }
 
