@@ -103,6 +103,9 @@ func New(ctx context.Context, client Client, opts ...Option) (*crypto.StaticKeyP
 		if err != nil {
 			return nil, fmt.Errorf("awskms: failed to decrypt key %q: %w", ek.id, err)
 		}
+		if len(out.Plaintext) != 32 { // must be AES-256
+			return nil, fmt.Errorf("awskms: decrypted key %q is %d bytes, want 32", ek.id, len(out.Plaintext))
+		}
 
 		keys = append(keys, decryptedKey{bytes: out.Plaintext, id: ek.id})
 	}

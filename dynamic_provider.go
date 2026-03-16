@@ -158,7 +158,10 @@ func (p *DynamicKeyProvider) SetCurrentKeyID(id string) error {
 	if !ok {
 		return fmt.Errorf("%w: %s", ErrKeyNotFound, id)
 	}
-	p.current = key
+	// Copy key bytes so p.current.Bytes and p.keys[id].Bytes are independent.
+	// Without this, a concurrent RemoveKey on the previously-current key could
+	// zero p.current.Bytes in place via the shared backing array.
+	p.current = key.copy()
 	return nil
 }
 

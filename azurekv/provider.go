@@ -103,6 +103,9 @@ func New(ctx context.Context, client Client, opts ...Option) (*crypto.StaticKeyP
 		if err != nil {
 			return nil, fmt.Errorf("azurekv: failed to unwrap key %q: %w", wk.id, err)
 		}
+		if len(resp.Result) != 32 { // must be AES-256
+			return nil, fmt.Errorf("azurekv: unwrapped key %q is %d bytes, want 32", wk.id, len(resp.Result))
+		}
 
 		keys = append(keys, decryptedKey{bytes: resp.Result, id: wk.id})
 	}

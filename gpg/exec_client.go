@@ -5,7 +5,14 @@ import (
 	"context"
 	"fmt"
 	"os/exec"
+	"strings"
+	"unicode"
 )
+
+// maxStderrLen is the maximum number of bytes included from gpg stderr in
+// error messages. gpg stderr can contain key fingerprints, user IDs, and
+// other metadata; we truncate to avoid leaking sensitive details into logs.
+const maxStderrLen = 200
 
 // ExecClient decrypts GPG ciphertext by invoking the system gpg binary.
 // The GPG keyring must already have the appropriate private key imported.
@@ -53,12 +60,30 @@ func (c *ExecClient) Decrypt(ctx context.Context, ciphertext []byte) ([]byte, er
 	cmd.Stderr = &stderr
 
 	if err := cmd.Run(); err != nil {
-		return nil, fmt.Errorf("gpg exec: %w: %s", err, stderr.String())
+		return nil, fmt.Errorf("gpg exec: %w: %s", err, sanitizeStderr(stderr.Bytes()))
 	}
 
 	plaintext := make([]byte, stdout.Len())
 	copy(plaintext, stdout.Bytes())
 	return plaintext, nil
+}
+
+// sanitizeStderr returns a truncated, printable-only excerpt of gpg stderr
+// suitable for inclusion in error messages. gpg stderr can contain key
+// fingerprints, user IDs, and email addresses; this prevents them from
+// leaking into logs while still providing actionable diagnostic information.
+func sanitizeStderr(raw []byte) string {
+	s := strings.Map(func(r rune) rune {
+		if unicode.IsPrint(r) || r == '\n' {
+			return r
+		}
+		return -1
+	}, string(raw))
+	s = strings.TrimSpace(s)
+	if len(s) > maxStderrLen {
+		s = s[:maxStderrLen] + "..."
+	}
+	return s
 }
 
 // Compile-time interface check.
