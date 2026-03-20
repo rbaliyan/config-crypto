@@ -4,7 +4,7 @@ go 1.25.8
 
 require (
 	cloud.google.com/go/kms v1.26.0
-	github.com/rbaliyan/config-crypto v0.2.4
+	github.com/rbaliyan/config-crypto v0.2.5
 )
 
 require (
