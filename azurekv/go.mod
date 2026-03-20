@@ -4,7 +4,7 @@ go 1.25.8
 
 require (
 	github.com/Azure/azure-sdk-for-go/sdk/security/keyvault/azkeys v1.4.0
-	github.com/rbaliyan/config-crypto v0.2.4
+	github.com/rbaliyan/config-crypto v0.2.5
 )
 
 require (
