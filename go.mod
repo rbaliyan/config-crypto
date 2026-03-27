@@ -4,7 +4,7 @@ go 1.25.8
 
 require (
 	github.com/AdamKorcz/go-118-fuzz-build v0.0.0-20250520111509-a70c2aa677fa
-	github.com/rbaliyan/config v0.5.1
+	github.com/rbaliyan/config v0.5.2
 )
 
 require (
