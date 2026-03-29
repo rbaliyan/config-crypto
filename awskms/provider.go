@@ -91,6 +91,11 @@ func New(ctx context.Context, client Client, opts ...Option) (*crypto.StaticKeyP
 		id    string
 	}
 	keys := make([]decryptedKey, 0, len(o.encryptedKeys))
+	defer func() {
+		for _, k := range keys {
+			clear(k.bytes)
+		}
+	}()
 	for _, ek := range o.encryptedKeys {
 		input := &kms.DecryptInput{
 			CiphertextBlob: ek.ciphertext,
@@ -119,11 +124,6 @@ func New(ctx context.Context, client Client, opts ...Option) (*crypto.StaticKeyP
 	provider, err := crypto.NewStaticKeyProvider(keys[0].bytes, keys[0].id, staticOpts...)
 	if err != nil {
 		return nil, fmt.Errorf("awskms: %w", err)
-	}
-
-	// Zero the decrypted key bytes now that they've been copied into the provider
-	for _, k := range keys {
-		clear(k.bytes)
 	}
 
 	return provider, nil

@@ -261,3 +261,15 @@ The encrypted payload uses a self-describing binary format:
 ```
 
 Overhead is ~93 + len(key_id) bytes per value (header + GCM authentication tag).
+
+## Security Considerations
+
+Key material is defensively copied and zeroed after use (`Destroy()`, DEK clearing,
+KMS provider intermediate buffers). However, Go's `crypto/aes` expands key bytes
+into an internal round-key schedule at cipher creation time and does not expose a
+way to zero that schedule. This means copies of key material may persist in heap
+memory until garbage-collected, even after `Destroy()` is called. This is a known
+limitation of the Go standard library and applies to all Go programs using
+`crypto/aes`. For threat models requiring guaranteed key erasure, consider using
+a hardware security module (HSM) or a KMS provider where key material never
+leaves the HSM boundary.

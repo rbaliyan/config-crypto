@@ -192,6 +192,11 @@ func (p *DynamicKeyProvider) RemoveKey(id string) error {
 // The caller must ensure all referenced key IDs have been added via AddKey
 // before the config value is changed.
 // Returns a cancel function to stop watching.
+//
+// Security: the watched namespace controls which key ID is active for encryption.
+// An attacker with write access to this namespace can force a rollback to any
+// previously-registered key ID. Ensure the watched namespace has write-access
+// controls at least as strong as the key material itself.
 func (p *DynamicKeyProvider) WatchKeyRotation(ctx context.Context, store config.Store, namespace, key string) (context.CancelFunc, error) {
 	watchCtx, cancel := context.WithCancel(ctx)
 
@@ -233,8 +238,10 @@ func (p *DynamicKeyProvider) WatchKeyRotation(ctx context.Context, store config.
 				if onErr != nil {
 					onErr(err)
 				} else {
-					slog.Default().Warn("crypto: key rotation failed", "key_id", newKeyID, "error", err)
+					slog.Default().Error("crypto: key rotation failed", "key_id", newKeyID, "error", err)
 				}
+			} else {
+				slog.Default().Warn("crypto: key rotated", "key_id", newKeyID)
 			}
 		}
 	}()
