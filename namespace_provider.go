@@ -23,9 +23,12 @@ type namespaceOptions struct {
 }
 
 // WithNamespaceProvider registers a KeyProvider for the given namespace.
+// Nil providers are ignored.
 func WithNamespaceProvider(namespace string, provider KeyProvider) NamespaceOption {
 	return func(o *namespaceOptions) {
-		o.providers[namespace] = provider
+		if provider != nil {
+			o.providers[namespace] = provider
+		}
 	}
 }
 
@@ -114,7 +117,11 @@ func (s *NamespaceKeySelector) ForNamespace(namespace string) KeyProvider {
 }
 
 // AddProvider registers a KeyProvider for the given namespace at runtime.
+// It is a no-op if provider is nil.
 func (s *NamespaceKeySelector) AddProvider(namespace string, provider KeyProvider) {
+	if provider == nil {
+		return
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.providers[namespace] = provider

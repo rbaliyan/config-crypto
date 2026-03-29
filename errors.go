@@ -25,7 +25,7 @@ var (
 	ErrRemoveCurrentKey = errors.New("crypto: cannot remove current key")
 
 	// ErrNoProviderForNamespace is returned when a namespace has no registered provider and no fallback is set.
-	ErrNoProviderForNamespace = errors.New("config-crypto: no key provider for namespace")
+	ErrNoProviderForNamespace = errors.New("crypto: no key provider for namespace")
 )
 
 // IsKeyNotFound returns true if the error is or wraps ErrKeyNotFound.
