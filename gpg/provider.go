@@ -92,6 +92,11 @@ func New(ctx context.Context, client Client, opts ...Option) (*crypto.StaticKeyP
 		id    string
 	}
 	keys := make([]decryptedKey, 0, len(o.encryptedKeys))
+	defer func() {
+		for _, k := range keys {
+			clear(k.bytes)
+		}
+	}()
 	for _, ek := range o.encryptedKeys {
 		plaintext, err := client.Decrypt(ctx, ek.ciphertext)
 		if err != nil {
@@ -111,10 +116,6 @@ func New(ctx context.Context, client Client, opts ...Option) (*crypto.StaticKeyP
 	provider, err := crypto.NewStaticKeyProvider(keys[0].bytes, keys[0].id, staticOpts...)
 	if err != nil {
 		return nil, fmt.Errorf("gpg: %w", err)
-	}
-
-	for _, k := range keys {
-		clear(k.bytes)
 	}
 
 	return provider, nil
