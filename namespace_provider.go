@@ -8,6 +8,12 @@ import (
 // NamespaceKeySelector routes key operations to namespace-specific KeyProviders.
 // It holds a map of namespace to KeyProvider plus an optional fallback provider.
 // It is safe for concurrent use; providers can be added or removed at runtime.
+//
+// In multi-tenant scenarios, use ForNamespace to obtain a namespace-scoped
+// KeyProvider rather than calling CurrentKey or KeyByID directly on the selector.
+// The top-level KeyByID searches across all registered providers and is therefore
+// not namespace-safe; a tenant could decrypt values belonging to another tenant
+// if key IDs overlap.
 type NamespaceKeySelector struct {
 	mu        sync.RWMutex
 	providers map[string]KeyProvider
@@ -77,6 +83,10 @@ func (s *NamespaceKeySelector) CurrentKey() (Key, error) {
 // KeyByID searches all providers for the given key ID.
 // It checks the fallback first, then iterates namespace providers.
 // Returns ErrKeyNotFound if no provider has the key.
+//
+// Warning: this method is not namespace-safe. It searches across all registered
+// namespace providers and returns the first match. In multi-tenant deployments
+// where key IDs may overlap, use ForNamespace to obtain a scoped provider instead.
 func (s *NamespaceKeySelector) KeyByID(id string) (Key, error) {
 	s.mu.RLock()
 	fb := s.fallback

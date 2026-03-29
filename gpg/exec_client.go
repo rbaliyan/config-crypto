@@ -65,6 +65,7 @@ func (c *ExecClient) Decrypt(ctx context.Context, ciphertext []byte) ([]byte, er
 
 	plaintext := make([]byte, stdout.Len())
 	copy(plaintext, stdout.Bytes())
+	clear(stdout.Bytes())
 	return plaintext, nil
 }
 

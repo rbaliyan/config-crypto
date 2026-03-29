@@ -95,6 +95,11 @@ func New(ctx context.Context, client Client, opts ...Option) (*crypto.StaticKeyP
 		id    string
 	}
 	keys := make([]decryptedKey, 0, len(o.wrappedKeys))
+	defer func() {
+		for _, k := range keys {
+			clear(k.bytes)
+		}
+	}()
 	for _, wk := range o.wrappedKeys {
 		resp, err := client.UnwrapKey(ctx, wk.keyName, wk.keyVersion, azkeys.KeyOperationParameters{
 			Algorithm: &wk.algorithm,
@@ -118,10 +123,6 @@ func New(ctx context.Context, client Client, opts ...Option) (*crypto.StaticKeyP
 	provider, err := crypto.NewStaticKeyProvider(keys[0].bytes, keys[0].id, staticOpts...)
 	if err != nil {
 		return nil, fmt.Errorf("azurekv: %w", err)
-	}
-
-	for _, k := range keys {
-		clear(k.bytes)
 	}
 
 	return provider, nil
