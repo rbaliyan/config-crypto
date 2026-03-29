@@ -23,6 +23,9 @@ var (
 
 	// ErrRemoveCurrentKey is returned when attempting to remove the active encryption key.
 	ErrRemoveCurrentKey = errors.New("crypto: cannot remove current key")
+
+	// ErrNoProviderForNamespace is returned when a namespace has no registered provider and no fallback is set.
+	ErrNoProviderForNamespace = errors.New("config-crypto: no key provider for namespace")
 )
 
 // IsKeyNotFound returns true if the error is or wraps ErrKeyNotFound.
@@ -58,4 +61,9 @@ func IsProviderDestroyed(err error) bool {
 // IsRemoveCurrentKey returns true if the error is or wraps ErrRemoveCurrentKey.
 func IsRemoveCurrentKey(err error) bool {
 	return errors.Is(err, ErrRemoveCurrentKey)
+}
+
+// IsNoProviderForNamespace returns true if the error is or wraps ErrNoProviderForNamespace.
+func IsNoProviderForNamespace(err error) bool {
+	return errors.Is(err, ErrNoProviderForNamespace)
 }
