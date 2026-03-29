@@ -43,7 +43,10 @@ func main() {
     }
 
     // Create and register the encrypted codec
-    encJSON := crypto.NewCodec(codec.JSON(), provider)
+    encJSON, err := crypto.NewCodec(codec.Default(), provider)
+    if err != nil {
+        panic(err)
+    }
     codec.Register(encJSON)
 
     // Set up a config store
@@ -89,7 +92,7 @@ newKey := []byte("rotated-32-byte-key-for-aes!!!!")
 newProvider, _ := crypto.NewStaticKeyProvider(newKey, "key-v2",
     crypto.WithOldKey(oldKey, "key-v1"),
 )
-encJSON := crypto.NewCodec(codec.JSON(), newProvider)
+encJSON, _ := crypto.NewCodec(codec.Default(), newProvider)
 codec.Register(encJSON)
 
 // Reads automatically use the correct key (key ID is in the encrypted header)
@@ -166,7 +169,7 @@ kmsClient := kms.NewFromConfig(cfg)
 provider, _ := awskms.New(ctx, kmsClient,
     awskms.WithEncryptedKey(encryptedKeyBytes, "key-1"),
 )
-encJSON := crypto.NewCodec(codec.JSON(), provider)
+encJSON, _ := crypto.NewCodec(codec.Default(), provider)
 ```
 
 ### GCP Cloud KMS
@@ -214,6 +217,24 @@ provider, _ := vault.New(ctx, client,
     vault.WithEncryptedKey("vault:v1:base64data", "key-1", "my-transit-key"),
 )
 ```
+
+### GPG
+
+```bash
+go get github.com/rbaliyan/config-crypto/gpg
+```
+
+```go
+import "github.com/rbaliyan/config-crypto/gpg"
+
+encryptedKey, _ := os.ReadFile("keys/current.key.gpg")
+client := gpg.NewExecClient() // uses system gpg binary
+provider, _ := gpg.New(ctx, client,
+    gpg.WithEncryptedKey(encryptedKey, "key-1"),
+)
+```
+
+Suited for non-server deployments where keys are distributed as GPG-encrypted files alongside the application.
 
 All KMS providers decrypt keys at construction time and cache them in a `StaticKeyProvider`. The KMS client is not retained after construction. Key rotation works the same way — pass multiple keys, first is current.
 
