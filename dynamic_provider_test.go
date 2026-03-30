@@ -336,6 +336,10 @@ func TestDynamicKeyProviderWatchKeyRotation(t *testing.T) {
 	}
 	defer cancel()
 
+	// Allow any buffered watch event from the initial Set to be consumed
+	// before triggering the rotation we actually want to test.
+	time.Sleep(100 * time.Millisecond)
+
 	// Verify current key
 	current, _ := p.CurrentKey()
 	if current.ID != "key-1" {
