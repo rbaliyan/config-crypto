@@ -47,7 +47,7 @@ func NewExecClient(opts ...ExecOption) *ExecClient {
 // It accepts both ASCII-armored and binary OpenPGP messages.
 // The private key must be available in the system GPG keyring.
 func (c *ExecClient) Decrypt(ctx context.Context, ciphertext []byte) ([]byte, error) {
-	cmd := exec.CommandContext(ctx, c.gpgBin,
+	cmd := exec.CommandContext(ctx, c.gpgBin, // #nosec G204 -- gpgBin is developer-configured, not user input
 		"--batch",
 		"--quiet",
 		"--decrypt",
