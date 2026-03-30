@@ -64,7 +64,7 @@ func writeHeader(w io.Writer, h *header) error {
 	if len(keyIDBytes) > maxKeyIDLen {
 		return fmt.Errorf("%w: key ID too long (%d bytes, max %d)", ErrInvalidFormat, len(keyIDBytes), maxKeyIDLen)
 	}
-	meta := []byte{h.version, h.algorithm, byte(len(keyIDBytes))}
+	meta := []byte{h.version, h.algorithm, byte(len(keyIDBytes))} // #nosec G115 -- keyID length validated by maxKeyIDLen (<=255)
 	if _, err := w.Write(meta); err != nil {
 		return err
 	}
