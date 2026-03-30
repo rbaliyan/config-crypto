@@ -31,10 +31,14 @@ jobs:
           cd ../vault && go run golang.org/x/vuln/cmd/govulncheck@v1.1.4 ./...
 
   gosec:
-    name: GoSec SAST
+    name: GoSec (${{ matrix.module }})
     runs-on: ubuntu-latest
     permissions:
       security-events: write
+    strategy:
+      fail-fast: false
+      matrix:
+        module: [root, awskms, gcpkms, azurekv, vault, gpg]
     steps:
       - name: Checkout code
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -49,16 +53,15 @@ jobs:
 
       - name: Run GoSec
         run: |
-          gosec -severity medium -confidence medium ./...
-          cd awskms && gosec -severity medium -confidence medium ./...
-          cd ../gcpkms && gosec -severity medium -confidence medium ./...
-          cd ../azurekv && gosec -severity medium -confidence medium ./...
-          cd ../vault && gosec -severity medium -confidence medium ./...
-          cd ../gpg && gosec -severity medium -confidence medium ./...
-          cd .. && gosec -fmt sarif -out gosec-results.sarif -severity medium -confidence medium -exclude-dir=awskms -exclude-dir=gcpkms -exclude-dir=azurekv -exclude-dir=vault -exclude-dir=gpg ./...
+          if [ "${{ matrix.module }}" = "root" ]; then
+            gosec -fmt sarif -out gosec-results.sarif -severity medium -confidence medium -exclude-dir=awskms -exclude-dir=gcpkms -exclude-dir=azurekv -exclude-dir=vault -exclude-dir=gpg ./...
+          else
+            cd ${{ matrix.module }}
+            gosec -fmt sarif -out ../gosec-results.sarif -severity medium -confidence medium ./...
+          fi
 
       - name: Upload SARIF to GitHub Security
+        if: always() && matrix.module == 'root'
         uses: github/codeql-action/upload-sarif@38697555549f1db7851b81482ff19f1fa5c4fedc # v3
-        if: always()
         with:
           sarif_file: gosec-results.sarif
