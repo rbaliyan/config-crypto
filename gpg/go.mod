@@ -1,6 +1,6 @@
 module github.com/rbaliyan/config-crypto/gpg
 
-go 1.25.8
+go 1.25.9
 
 require github.com/rbaliyan/config-crypto v0.2.4
 
