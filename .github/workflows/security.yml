@@ -18,17 +18,20 @@ jobs:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
 
       - name: Set up Go
-        uses: actions/setup-go@4b73464bb391d4059bd26b0524d20df3927bd417 # v6
+        uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # v6
         with:
           go-version: '1.25.8'
 
+      - name: Install govulncheck
+        run: go install golang.org/x/vuln/cmd/govulncheck@v1.1.4
+
       - name: Run govulncheck
         run: |
-          go run golang.org/x/vuln/cmd/govulncheck@v1.1.4 ./...
-          cd awskms && go run golang.org/x/vuln/cmd/govulncheck@v1.1.4 ./...
-          cd ../gcpkms && go run golang.org/x/vuln/cmd/govulncheck@v1.1.4 ./...
-          cd ../azurekv && go run golang.org/x/vuln/cmd/govulncheck@v1.1.4 ./...
-          cd ../vault && go run golang.org/x/vuln/cmd/govulncheck@v1.1.4 ./...
+          govulncheck ./...
+          cd awskms && govulncheck ./...
+          cd ../gcpkms && govulncheck ./...
+          cd ../azurekv && govulncheck ./...
+          cd ../vault && govulncheck ./...
 
   gosec:
     name: GoSec (${{ matrix.module }})
@@ -44,12 +47,12 @@ jobs:
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
 
       - name: Set up Go
-        uses: actions/setup-go@4b73464bb391d4059bd26b0524d20df3927bd417 # v6
+        uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # v6
         with:
           go-version-file: go.mod
 
       - name: Install GoSec
-        run: go install github.com/securego/gosec/v2/cmd/gosec@latest
+        run: go install github.com/securego/gosec/v2/cmd/gosec@v2.25.0
 
       - name: Run GoSec
         run: |
@@ -62,6 +65,6 @@ jobs:
 
       - name: Upload SARIF to GitHub Security
         if: always() && matrix.module == 'root'
-        uses: github/codeql-action/upload-sarif@38697555549f1db7851b81482ff19f1fa5c4fedc # v3
+        uses: github/codeql-action/upload-sarif@c10b8064de6f491fea524254123dbe5e09572f13 # v3
         with:
           sarif_file: gosec-results.sarif
