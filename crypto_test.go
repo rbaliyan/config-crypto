@@ -441,7 +441,9 @@ func TestChainWithCryptoTransformer(t *testing.T) {
 		t.Errorf("Name() = %q, want %q", chained.Name(), "encrypted:json:json")
 	}
 
-	type Payload struct{ Secret string `json:"secret"` }
+	type Payload struct {
+		Secret string `json:"secret"`
+	}
 	original := Payload{Secret: "my-api-key"}
 	data, err := chained.Encode(ctx, original)
 	if err != nil {

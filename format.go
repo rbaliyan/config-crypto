@@ -48,7 +48,7 @@ const (
 // header represents the parsed header of an encrypted payload.
 type header struct {
 	version      byte
-	format       byte   // v2 only; 0 for v1
+	format       byte // v2 only; 0 for v1
 	algorithm    byte
 	keyID        string
 	dekNonce     []byte // 12 bytes
