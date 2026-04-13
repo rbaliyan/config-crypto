@@ -4,7 +4,7 @@ go 1.25.9
 
 require (
 	github.com/aws/aws-sdk-go-v2/service/kms v1.50.4
-	github.com/rbaliyan/config-crypto v0.2.5
+	github.com/rbaliyan/config-crypto v0.3.0
 )
 
 require (
@@ -14,5 +14,3 @@ require (
 	github.com/aws/smithy-go v1.24.2 // indirect
 	github.com/rbaliyan/config v0.6.0 // indirect
 )
-
-replace github.com/rbaliyan/config-crypto => ../
