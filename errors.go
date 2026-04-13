@@ -12,14 +12,17 @@ var (
 	// ErrInvalidFormat is returned when encrypted data has an invalid format.
 	ErrInvalidFormat = errors.New("crypto: invalid encrypted data format")
 
+	// ErrUnsupportedFormat is returned when the format byte in a v2 header is not recognised.
+	ErrUnsupportedFormat = errors.New("crypto: unsupported encrypted format")
+
 	// ErrDecryptionFailed is returned when decryption fails (wrong key, tampered data).
 	ErrDecryptionFailed = errors.New("crypto: decryption failed")
 
 	// ErrInvalidKeyID is returned when a key ID is empty or invalid.
 	ErrInvalidKeyID = errors.New("crypto: invalid key ID")
 
-	// ErrProviderDestroyed is returned when a provider has been destroyed.
-	ErrProviderDestroyed = errors.New("crypto: provider has been destroyed")
+	// ErrProviderClosed is returned when a provider has been closed.
+	ErrProviderClosed = errors.New("crypto: provider has been closed")
 
 	// ErrRemoveCurrentKey is returned when attempting to remove the active encryption key.
 	ErrRemoveCurrentKey = errors.New("crypto: cannot remove current key")
@@ -43,6 +46,11 @@ func IsInvalidFormat(err error) bool {
 	return errors.Is(err, ErrInvalidFormat)
 }
 
+// IsUnsupportedFormat returns true if the error is or wraps ErrUnsupportedFormat.
+func IsUnsupportedFormat(err error) bool {
+	return errors.Is(err, ErrUnsupportedFormat)
+}
+
 // IsDecryptionFailed returns true if the error is or wraps ErrDecryptionFailed.
 func IsDecryptionFailed(err error) bool {
 	return errors.Is(err, ErrDecryptionFailed)
@@ -53,9 +61,9 @@ func IsInvalidKeyID(err error) bool {
 	return errors.Is(err, ErrInvalidKeyID)
 }
 
-// IsProviderDestroyed returns true if the error is or wraps ErrProviderDestroyed.
-func IsProviderDestroyed(err error) bool {
-	return errors.Is(err, ErrProviderDestroyed)
+// IsProviderClosed returns true if the error is or wraps ErrProviderClosed.
+func IsProviderClosed(err error) bool {
+	return errors.Is(err, ErrProviderClosed)
 }
 
 // IsRemoveCurrentKey returns true if the error is or wraps ErrRemoveCurrentKey.

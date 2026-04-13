@@ -6,32 +6,35 @@ import (
 	"fmt"
 )
 
-// decrypt decrypts data that was encrypted with envelope encryption.
-// The key ID from the header is used to look up the KEK from the provider.
-func decrypt(data []byte, provider KeyProvider) ([]byte, error) {
+// keyLookupFunc returns a defensive copy of key bytes for the given ID.
+type keyLookupFunc func(id string) ([]byte, error)
+
+// decryptEnvelope decrypts data that was encrypted with envelope encryption.
+// It supports both v1 and v2 header formats.
+func decryptEnvelope(data []byte, lookupKey keyLookupFunc) ([]byte, error) {
 	h, ciphertext, err := readHeader(data)
 	if err != nil {
 		return nil, err
 	}
 
-	// GCM ciphertext must contain at least the authentication tag
+	// GCM ciphertext must contain at least the authentication tag.
 	if len(ciphertext) < gcmTagSize {
 		return nil, fmt.Errorf("%w: ciphertext too short", ErrInvalidFormat)
 	}
 
-	// Look up the KEK by key ID
-	kek, err := provider.KeyByID(h.keyID)
+	// Look up the KEK by key ID.
+	kekBytes, err := lookupKey(h.keyID)
 	if err != nil {
 		return nil, err
 	}
-	defer clear(kek.Bytes)
+	defer clear(kekBytes)
 
-	if len(kek.Bytes) != aesKeySize {
-		return nil, fmt.Errorf("%w: got %d bytes", ErrInvalidKeySize, len(kek.Bytes))
+	if len(kekBytes) != aesKeySize {
+		return nil, fmt.Errorf("%w: got %d bytes", ErrInvalidKeySize, len(kekBytes))
 	}
 
-	// Decrypt the DEK, using key ID as AAD to verify key identity binding
-	kekBlock, err := aes.NewCipher(kek.Bytes)
+	// Decrypt the DEK, using key ID as AAD.
+	kekBlock, err := aes.NewCipher(kekBytes)
 	if err != nil {
 		return nil, fmt.Errorf("%w: %v", ErrDecryptionFailed, err)
 	}
@@ -46,7 +49,7 @@ func decrypt(data []byte, provider KeyProvider) ([]byte, error) {
 	}
 	defer clear(dek)
 
-	// Decrypt the data with the DEK
+	// Decrypt the data with the DEK.
 	dekBlock, err := aes.NewCipher(dek)
 	if err != nil {
 		return nil, fmt.Errorf("%w: %v", ErrDecryptionFailed, err)

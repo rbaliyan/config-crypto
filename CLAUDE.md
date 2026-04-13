@@ -20,11 +20,31 @@ Encryption codec for the `github.com/rbaliyan/config` library. Provides transpar
 
 ### Codec Integration
 
-The config library stores a codec name with every value. On read, `codec.Get(name)` resolves the codec. This package registers an encrypting codec (e.g. `"encrypted:json"`) that wraps an inner codec — `Encode` serializes then encrypts, `Decode` decrypts then deserializes. Zero changes to config or config-server needed.
+The config library stores a codec name with every value. On read, `codec.Get(name)` resolves the codec. This package registers an encrypting codec (e.g. `"encrypted:json"`) that wraps an inner codec — `Encode` serializes then encrypts, `Decode` decrypts then deserializes. Zero changes to config or config-server needed beyond the ctx-aware `codec.Codec` interface.
+
+### The Provider Interface
+
+The codec depends on a single abstraction:
+
+```go
+type Provider interface {
+    Encrypt(ctx context.Context, plaintext []byte) ([]byte, error)
+    Decrypt(ctx context.Context, ciphertext []byte) ([]byte, error)
+    HealthCheck(ctx context.Context) error
+    Close() error
+}
+```
+
+Raw key bytes never leave a Provider — callers see only Encrypt/Decrypt. Two constructors:
+
+- `crypto.NewProvider(keyBytes, id, opts...)` — static, returns an unexported envelope Provider backed by a raw 32-byte AES-256 key. The common case.
+- `crypto.NewRotatingProvider(initialBytes, id, opts...)` — exported mutable Provider used by KMS sub-modules to drive runtime key rotation via `AddKey`/`SetCurrentKey`/`RemoveKey`. End users rarely construct directly.
+
+`NamespaceSelector` routes `Encrypt`/`Decrypt` to namespace-specific providers; `ForNamespace(ns) Provider` yields a scoped view. `RemoveAndClose` removes a namespace's provider and closes it in one step.
 
 ### Envelope Encryption
 
-Each value gets a unique random DEK (Data Encryption Key), which is itself encrypted with the KEK (Key Encryption Key) provided by the `KeyProvider`. This eliminates nonce reuse risk and provides a clean architecture for key rotation. DEKs are zeroed after use via `defer clear(dek)`.
+Each value gets a unique random DEK (Data Encryption Key), which is itself wrapped with the KEK (Key Encryption Key) held by the Provider. This eliminates nonce reuse risk and keeps ciphertext portable: as long as the operator holds the same KEK bytes, ciphertext decrypts regardless of where those bytes came from (AWS KMS, Vault KV, a file, etc.). DEKs are zeroed after use via `defer clear(dek)`.
 
 ### Security Properties
 
@@ -32,34 +52,43 @@ Each value gets a unique random DEK (Data Encryption Key), which is itself encry
 - **AAD binding**: key ID is used as GCM additional authenticated data on both DEK-wrapping and data-encryption layers, preventing key ID substitution
 - **DEK zeroing**: ephemeral key material is cleared after use
 - **Defensive copies**: key bytes are copied on construction; header parsing copies slices from input
-- **Key material destruction**: `StaticKeyProvider.Destroy()` zeros all key material and blocks further operations
-- **Input validation**: `NewCodec` returns an error if inner codec or provider is nil; `NewStaticKeyProvider` and `WithOldKey` validate key size and ID
+- **Key material destruction**: `Provider.Close()` zeros all key material and blocks further operations; subsequent calls return `ErrProviderClosed`
+- **Input validation**: `NewCodec` errors on nil inner codec or Provider; `NewProvider`/`NewRotatingProvider`/`WithOldKey`/`AddKey` validate key size and ID
 
-### Binary Format (v1)
+### Binary Format
+
+Current format is **v2** (all new writes). **v1** is read-only for backward compatibility with pre-refactor ciphertext.
 
 ```
-[2B magic "EC"] [1B version=0x01] [1B alg=0x01 AES-256-GCM]
+v2:
+[2B magic "EC"]
+[1B version = 0x02] [1B format = 0x01] [1B alg = 0x01 AES-256-GCM]
 [1B key_id_len] [NB key_id UTF-8]
-[12B dek_nonce] [48B encrypted_dek (32B DEK + 16B GCM tag)]
+[12B dek_nonce] [2B encrypted_dek_len] [MB encrypted_dek]
 [12B data_nonce] [remaining: ciphertext + 16B GCM tag]
 ```
+
+The `format` byte is reserved for future wrapping schemes (post-quantum KEMs). `encrypted_dek` is variable-length (48B for local AES-GCM wrap). `readHeader` dispatches on the version byte; v1 uses a fixed 48B `encrypted_dek` and no `format`/`encrypted_dek_len` fields.
+
+A golden byte-vector test (`TestDecryptV1GoldenVector` + `TestGoldenV1Drift` in `format_test.go`) locks the v1 wire format against accidental changes.
 
 ### Key Components
 
 | File | Contents |
 |------|----------|
-| `crypto.go` | `Codec` struct implementing `codec.Codec`, wraps inner codec with encryption |
-| `encrypt.go` | `encrypt()` — generates DEK, encrypts data, wraps DEK with KEK, zeroes DEK |
-| `decrypt.go` | `decrypt()` — parses header, unwraps DEK, decrypts data, zeroes DEK |
-| `format.go` | Binary format constants, `header` struct, `writeHeader()`, `readHeader()` with defensive copies |
-| `key_provider.go` | `Key` struct, `KeyProvider` interface |
-| `static_provider.go` | `StaticKeyProvider` with rotation support, key byte copying, `Destroy()`, deferred option validation |
-| `errors.go` | Sentinel errors with `Is*()` helpers |
+| `crypto.go` | `Codec` struct implementing `codec.Codec` + `codec.Transformer`; wraps inner codec; threads ctx to Provider |
+| `provider.go` | `Provider` interface, `Option`, `WithOldKey`, `NewProvider`, unexported `staticProvider` with `HealthCheck`/`Close` |
+| `rotating_provider.go` | `RotatingProvider` (exported, mutable) with `AddKey`/`SetCurrentKey`/`RemoveKey`/`HealthCheck`/`Close` |
+| `namespace_provider.go` | `NamespaceSelector`, `WithNamespaceProvider`, `WithFallbackProvider`, `ForNamespace`, `AddProvider`, `RemoveProvider`, `RemoveAndClose`, `Close` |
+| `encrypt.go` | `encryptEnvelope` — generates DEK, encrypts data, wraps DEK with KEK, zeroes DEK, writes v2 header |
+| `decrypt.go` | `decryptEnvelope` — reads v1 or v2 header via `readHeader`, unwraps DEK (via `keyLookupFunc`), decrypts data, zeroes DEK |
+| `format.go` | Binary format constants, `header` struct, `writeHeaderV2`, `readHeader`/`readHeaderV1`/`readHeaderV2` with defensive copies |
+| `errors.go` | Sentinel errors with `Is*()` helpers: `ErrKeyNotFound`, `ErrInvalidKeySize`, `ErrInvalidFormat`, `ErrUnsupportedFormat`, `ErrDecryptionFailed`, `ErrInvalidKeyID`, `ErrProviderClosed`, `ErrRemoveCurrentKey`, `ErrNoProviderForNamespace` |
 | `benchmark_test.go` | Benchmarks for encode/decode at 1KB, 64KB, 1MB, and string payloads |
 
 ### KMS Provider Sub-Modules
 
-Each KMS provider is a separate Go module to avoid pulling unnecessary SDK dependencies.
+Each KMS provider is a separate Go module to avoid pulling unnecessary SDK dependencies. All return a `crypto.Provider`.
 
 | Module | Import Path | SDK |
 |--------|-------------|-----|
@@ -67,28 +96,38 @@ Each KMS provider is a separate Go module to avoid pulling unnecessary SDK depen
 | `gcpkms/` | `github.com/rbaliyan/config-crypto/gcpkms` | `cloud.google.com/go/kms` |
 | `azurekv/` | `github.com/rbaliyan/config-crypto/azurekv` | `azure-sdk-for-go/azkeys` |
 | `vault/` | `github.com/rbaliyan/config-crypto/vault` | None (interface-based, bring your own HTTP client) |
+| `gpg/` | `github.com/rbaliyan/config-crypto/gpg` | None (process- or library-based) |
 
-All KMS providers follow the same pattern:
+Common pattern (awskms, gcpkms, azurekv, gpg):
 - Accept a `Client` interface (subset of the real SDK) for testability
-- Decrypt/unwrap keys at construction time, cache in a `StaticKeyProvider`
-- Client is not retained after construction
+- Decrypt/unwrap keys at construction, copy into a `crypto.Provider`, discard the client
 - Decrypted key bytes are zeroed after being copied into the provider
+- `HealthCheck` inherits liveness-only semantics from the underlying static provider
+
+Vault module (**KV v2 only**):
+- Reads versioned secrets from a KV v2 path, maps each version to a key ID (via `WithKeyIDFormat`, default `strconv.Itoa`)
+- Optional background polling via `WithKeyVersionRefreshInterval` picks up new versions + promotes current automatically; exits on `Close`
+- `HealthCheck` calls `KVMetadata` to verify Vault reachability (readiness check)
+- Permanently-malformed versions are retried up to `maxVersionRetries=5` times, then skipped forever
+- **Note:** the prior Transit-based provider has been removed — ciphertext portability (ability to move DB contents between KMS backends) requires raw-bytes distribution, which Transit-style wrapping breaks
 
 ### Key Rotation Flow
 
 1. Encrypt with `key-v1` as current
-2. Rotate: create provider with `key-v2` current + `WithOldKey(v1bytes, "key-v1")`
-3. Reads: header contains key ID → `KeyByID` finds old key → decrypts
-4. Writes: `CurrentKey` returns `key-v2` → new values encrypted with new key
+2. Rotate: either
+   - Create a new Provider with `NewProvider(v2bytes, "key-v2", WithOldKey(v1bytes, "key-v1"))`, or
+   - Use a KMS sub-module that does this for you (vault KV with `WithKeyVersionRefreshInterval`)
+3. Reads: header contains key ID → internal lookup finds old key → decrypts
+4. Writes: new values encrypted with the new current key
 
 ## Dependencies
 
 Core module:
-- `github.com/rbaliyan/config` — for `codec.Codec` interface only
+- `github.com/rbaliyan/config` — for `codec.Codec` + `codec.Transformer` interfaces only (both take `ctx context.Context`)
 - Go stdlib: `crypto/aes`, `crypto/cipher`, `crypto/rand` — no third-party crypto
 
 KMS sub-modules have their own go.mod and only pull their respective SDK.
-Sub-modules reference the published core module (no replace directives).
+Sub-modules reference the published core module (no replace directives at release time).
 For local development against unreleased core changes, temporarily add `replace github.com/rbaliyan/config-crypto => ../` to the sub-module's go.mod.
 
 ## Testing
@@ -105,8 +144,12 @@ Key test scenarios:
 - Round-trip: encode/decode with various types (string, struct, map, int)
 - Key rotation: encrypt with old key, decrypt with provider that has both keys
 - Tamper detection: modified ciphertext causes GCM authentication failure
-- Key byte isolation: zeroing original bytes doesn't corrupt provider
-- Input validation: nil codec/provider, invalid key sizes, empty IDs
-- Error paths: CurrentKey failure, inner codec encode/decode failure, key ID boundaries
+- Key byte isolation: zeroing original bytes after `NewProvider` doesn't corrupt provider
+- Input validation: nil codec/provider, invalid key sizes, empty IDs, duplicate IDs
+- Error paths: Encrypt/Decrypt failure propagation, inner codec failure, key ID boundaries, closed provider rejections
+- `HealthCheck`: healthy, closed-state, vault readiness (metadata error → recovered)
+- `NamespaceSelector`: dispatch, fallback, runtime Add/Remove/RemoveAndClose, concurrent access, scoped-provider Close-propagation
+- v1 backward compatibility: hardcoded golden hex in `format_test.go` must continue to decode
+- Vault poll: picks up new versions, surfaces errors via handler, caps retries on permanent failures, Close stops the goroutine
 - Config integration: full round-trip through config memory store
 - Benchmarks: encode/decode at 1KB, 64KB, 1MB payload sizes

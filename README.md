@@ -33,36 +33,37 @@ import (
 func main() {
     ctx := context.Background()
 
-    // Create a 32-byte key for AES-256
+    // 32-byte key for AES-256.
     key := []byte("my-32-byte-secret-key-for-aes!!") // Use a proper key in production
 
-    // Create a key provider
-    provider, err := crypto.NewStaticKeyProvider(key, "key-1")
+    // Create a Provider from raw key bytes.
+    provider, err := crypto.NewProvider(key, "key-1")
     if err != nil {
         panic(err)
     }
+    defer provider.Close()
 
-    // Create and register the encrypted codec
+    // Create and register the encrypted codec.
     encJSON, err := crypto.NewCodec(codec.Default(), provider)
     if err != nil {
         panic(err)
     }
     codec.Register(encJSON)
 
-    // Set up a config store
+    // Set up a config store.
     store := memory.NewStore()
     store.Connect(ctx)
     defer store.Close(ctx)
 
-    // Encrypt sensitive values
-    encoded, _ := encJSON.Encode("sk-secret-api-key")
-    val, _ := config.NewValueFromBytes(encoded, encJSON.Name())
+    // Encrypt sensitive values.
+    encoded, _ := encJSON.Encode(ctx, "sk-secret-api-key")
+    val, _ := config.NewValueFromBytes(ctx, encoded, encJSON.Name())
     store.Set(ctx, config.DefaultNamespace, "secrets/api-key", val)
 
-    // Read is automatic — codec name "encrypted:json" resolves via registry
+    // Read is automatic — codec name "encrypted:json" resolves via registry.
     got, _ := store.Get(ctx, config.DefaultNamespace, "secrets/api-key")
     var result string
-    got.Unmarshal(&result)
+    got.Unmarshal(ctx, &result)
     fmt.Println(result) // "sk-secret-api-key"
 }
 ```
@@ -74,85 +75,91 @@ The config library stores a codec name (e.g. `"encrypted:json"`) with every valu
 - **Encode**: serialize with inner codec (JSON) → encrypt with AES-256-GCM
 - **Decode**: decrypt with AES-256-GCM → deserialize with inner codec (JSON)
 
-Each value uses **envelope encryption**: a random Data Encryption Key (DEK) encrypts the data, and the DEK itself is encrypted with your Key Encryption Key (KEK). This means:
+Each value uses **envelope encryption**: a random Data Encryption Key (DEK) encrypts the data, and the DEK itself is wrapped with your Key Encryption Key (KEK). This means:
 
 - No nonce reuse risk (random DEK per value)
 - Efficient key rotation (only re-wrap DEKs)
-- KMS-ready architecture
+- Ciphertext is portable — anyone holding the same KEK bytes can decrypt, regardless of where those bytes came from (AWS KMS today, Vault KV tomorrow)
+
+## The Provider Interface
+
+```go
+type Provider interface {
+    Encrypt(ctx context.Context, plaintext []byte) ([]byte, error)
+    Decrypt(ctx context.Context, ciphertext []byte) ([]byte, error)
+    HealthCheck(ctx context.Context) error
+    Close() error
+}
+```
+
+`Provider` is the single abstraction the codec depends on. Raw key bytes never leave the provider — callers see only Encrypt/Decrypt. `HealthCheck` returns nil for a healthy provider; static providers report liveness only (not closed), while providers with a live backend (e.g. the Vault KV provider) also probe reachability. `Close` zeros key material and stops any background goroutines.
+
+Two constructors live in the core package:
+
+- `crypto.NewProvider(keyBytes, id, opts...)` — static, from raw 32-byte key bytes. Most common.
+- `crypto.NewRotatingProvider(initialBytes, id, opts...)` — mutable, exposed so KMS sub-modules can drive runtime key rotation. End users rarely construct this directly.
 
 ## Key Rotation
 
-```go
-// Original setup
-oldKey := []byte("original-32-byte-key-for-aes!!!")
-oldProvider, _ := crypto.NewStaticKeyProvider(oldKey, "key-v1")
+### Static (restart-free is not needed)
 
-// Rotate: new key is current, old key available for decryption
+```go
+oldKey := []byte("original-32-byte-key-for-aes!!!")
 newKey := []byte("rotated-32-byte-key-for-aes!!!!")
-newProvider, _ := crypto.NewStaticKeyProvider(newKey, "key-v2",
+
+provider, _ := crypto.NewProvider(newKey, "key-v2",
     crypto.WithOldKey(oldKey, "key-v1"),
 )
-encJSON, _ := crypto.NewCodec(codec.Default(), newProvider)
+defer provider.Close()
+encJSON, _ := crypto.NewCodec(codec.Default(), provider)
 codec.Register(encJSON)
 
-// Reads automatically use the correct key (key ID is in the encrypted header)
-// Writes use the new key
+// Reads automatically use the correct key (key ID is in the header).
+// Writes use the new key.
 ```
 
-### Dynamic Key Rotation
+### Dynamic (runtime rotation without restart)
 
-`DynamicKeyProvider` supports runtime key rotation without restarting the application. Keys can be added, removed, and the current key switched at any time:
+`RotatingProvider` supports runtime key management. End-user code typically does not construct one directly — KMS sub-modules (e.g. `vault.New` with `WithKeyVersionRefreshInterval`) build and drive one for you. If you need manual control:
 
 ```go
-provider, _ := crypto.NewDynamicKeyProvider(initialKey, "key-v1")
+rp, _ := crypto.NewRotatingProvider(initialKey, "key-v1")
+defer rp.Close()
 
-// Add a new key and switch to it
-provider.AddKey(newKey, "key-v2")
-provider.SetCurrentKeyID("key-v2")
+// Add a new key and switch to it.
+rp.AddKey(newKey, "key-v2")
+rp.SetCurrentKey("key-v2")
 
-// Remove old key when no longer needed for decryption
-provider.RemoveKey("key-v1")
+// Remove old key when no longer needed for decryption.
+rp.RemoveKey("key-v1")
 ```
 
-#### Watch-Based Auto-Rotation
+## Namespace Routing
 
-Combine with a config store to rotate keys automatically when a config value changes:
+`NamespaceSelector` routes Encrypt/Decrypt to different providers based on namespace — useful for multi-tenant config where each tenant has its own KEK:
 
 ```go
-// Watch the "internal:config:crypto" namespace for key ID changes
-cancel, err := provider.WatchKeyRotation(ctx, store,
-    "internal:config:crypto", "key/current-id")
-if err != nil {
-    return err
-}
-defer cancel()
+tenantA, _ := crypto.NewProvider(keyA, "a-v1")
+tenantB, _ := crypto.NewProvider(keyB, "b-v1")
+fallback, _ := crypto.NewProvider(fallbackKey, "default-v1")
 
-// When store value at key/current-id changes to "key-v2",
-// the provider automatically switches to that key.
-// All referenced key IDs must be pre-loaded via AddKey.
+sel, _ := crypto.NewNamespaceSelector(
+    crypto.WithNamespaceProvider("tenant-a", tenantA),
+    crypto.WithNamespaceProvider("tenant-b", tenantB),
+    crypto.WithFallbackProvider(fallback),
+)
+defer sel.Close() // also closes all registered providers
+
+// Each namespace gets a scoped Provider.
+codecA, _ := crypto.NewCodec(codec.Default(), sel.ForNamespace("tenant-a"))
+codecB, _ := crypto.NewCodec(codec.Default(), sel.ForNamespace("tenant-b"))
 ```
 
-### Full Re-encryption
-
-To re-encrypt all values with the new key:
-
-1. Read all values (auto-decrypts with old key via header key ID)
-2. Re-set them (auto-encrypts with new current key)
-
-## Key Material Cleanup
-
-When a provider is no longer needed, call `Destroy()` to zero all key material in memory:
-
-```go
-provider, _ := crypto.NewStaticKeyProvider(key, "key-1")
-defer provider.Destroy()
-```
-
-After `Destroy()`, all operations return `ErrProviderDestroyed`.
+`AddProvider` / `RemoveProvider` / `RemoveAndClose` manage registrations at runtime.
 
 ## KMS Providers
 
-Each KMS provider is a **separate Go module** — you only pull the SDK you need.
+Each KMS provider is a **separate Go module** — you only pull the SDK you need. All of them return a `crypto.Provider`; internally they construct one of the canonical Providers above using key material fetched from the backend.
 
 ### AWS KMS
 
@@ -169,6 +176,7 @@ kmsClient := kms.NewFromConfig(cfg)
 provider, _ := awskms.New(ctx, kmsClient,
     awskms.WithEncryptedKey(encryptedKeyBytes, "key-1"),
 )
+defer provider.Close()
 encJSON, _ := crypto.NewCodec(codec.Default(), provider)
 ```
 
@@ -185,6 +193,7 @@ client, _ := kms.NewKeyManagementClient(ctx)
 provider, _ := gcpkms.New(ctx, client,
     gcpkms.WithEncryptedKey(ciphertext, "key-1", "projects/p/locations/l/keyRings/r/cryptoKeys/k"),
 )
+defer provider.Close()
 ```
 
 ### Azure Key Vault
@@ -201,22 +210,28 @@ client, _ := azkeys.NewClient("https://my-vault.vault.azure.net/", cred, nil)
 provider, _ := azurekv.New(ctx, client,
     azurekv.WithWrappedKey(wrappedBytes, "key-1", "my-key", "v1"),
 )
+defer provider.Close()
 ```
 
-### HashiCorp Vault (Transit)
+### HashiCorp Vault (KV v2)
 
 ```bash
 go get github.com/rbaliyan/config-crypto/vault
 ```
 
+Backed by the Vault KV v2 secrets engine. Each secret version becomes one key; the version number is used as the key ID. Supports optional background polling for new versions.
+
 ```go
 import "github.com/rbaliyan/config-crypto/vault"
 
-// Implement the vault.Client interface with your preferred HTTP client
-provider, _ := vault.New(ctx, client,
-    vault.WithEncryptedKey("vault:v1:base64data", "key-1", "my-transit-key"),
+// Bring your own Client (HTTP-backed struct satisfying vault.Client).
+provider, _ := vault.New(ctx, client, "secret", "config-crypto/keys",
+    vault.WithKeyVersionRefreshInterval(30 * time.Second),
 )
+defer provider.Close() // stops the background poller
 ```
+
+> **Note:** The previous Transit-based provider (which decrypted a wrapped key at startup) has been removed. Transit-wrapped ciphertext is not portable across KMS backends; this library favours raw-bytes distribution so the database of encrypted values stays portable for its full lifetime, regardless of where the operator chooses to store KEKs tomorrow.
 
 ### GPG
 
@@ -232,44 +247,41 @@ client := gpg.NewExecClient() // uses system gpg binary
 provider, _ := gpg.New(ctx, client,
     gpg.WithEncryptedKey(encryptedKey, "key-1"),
 )
+defer provider.Close()
 ```
 
 Suited for non-server deployments where keys are distributed as GPG-encrypted files alongside the application.
 
-All KMS providers decrypt keys at construction time and cache them in a `StaticKeyProvider`. The KMS client is not retained after construction. Key rotation works the same way — pass multiple keys, first is current.
+All KMS providers decrypt their key material at construction time, copy it into a local envelope provider, and discard the KMS client. KMS providers are static by default; for dynamic key rotation use the Vault KV provider with `WithKeyVersionRefreshInterval`, or build a `RotatingProvider` yourself and swap keys manually.
 
-## Custom Key Providers
+## HealthCheck
 
-Implement the `KeyProvider` interface for other key management systems:
+`HealthCheck(ctx)` returns nil when the provider is usable. Its semantics depend on the backing provider:
 
-```go
-type KeyProvider interface {
-    CurrentKey() (crypto.Key, error)
-    KeyByID(id string) (crypto.Key, error)
-}
-```
+- **Static providers** (`NewProvider`, `NewRotatingProvider`, and the AWS/GCP/Azure/GPG KMS wrappers) report *liveness only* — nil unless `Close` has been called. They do not contact any backend.
+- **Vault KV provider** reports *readiness* — it calls `KVMetadata` on every HealthCheck to verify Vault is reachable. Use the `ctx` deadline to bound this round-trip.
+- **NamespaceSelector**: `sel.ForNamespace(ns).HealthCheck(ctx)` delegates to the registered provider for that namespace (or returns `ErrNoProviderForNamespace`).
 
 ## Binary Format
 
-The encrypted payload uses a self-describing binary format:
+The encrypted payload is self-describing:
 
 ```
-[2B magic "EC"] [1B version] [1B algorithm]
-[1B key_id_len] [NB key_id]
-[12B dek_nonce] [48B encrypted_dek]
-[12B data_nonce] [remaining: ciphertext + GCM tag]
+[2B magic "EC"]
+[1B version = 0x02] [1B format = 0x01] [1B algorithm = 0x01 AES-256-GCM]
+[1B key_id_len] [NB key_id UTF-8]
+[12B dek_nonce] [2B encrypted_dek_len] [MB encrypted_dek]
+[12B data_nonce] [remaining: ciphertext + 16B GCM tag]
 ```
 
-Overhead is ~93 + len(key_id) bytes per value (header + GCM authentication tag).
+The `format` byte is reserved for future wrapping schemes (e.g. post-quantum KEMs). `encrypted_dek` is variable-length (currently always 48B for AES-256-GCM wrap: 32B DEK + 16B tag). Overhead is ~49 + len(key_id) bytes of header plus 16B GCM tag on the payload.
+
+**v1 compatibility:** Ciphertext produced by releases before the v2 format landed is still decryptable. The reader sniffs the version byte and dispatches to the v1 or v2 parser. `Encrypt` always writes v2.
 
 ## Security Considerations
 
-Key material is defensively copied and zeroed after use (`Destroy()`, DEK clearing,
-KMS provider intermediate buffers). However, Go's `crypto/aes` expands key bytes
-into an internal round-key schedule at cipher creation time and does not expose a
-way to zero that schedule. This means copies of key material may persist in heap
-memory until garbage-collected, even after `Destroy()` is called. This is a known
-limitation of the Go standard library and applies to all Go programs using
-`crypto/aes`. For threat models requiring guaranteed key erasure, consider using
-a hardware security module (HSM) or a KMS provider where key material never
-leaves the HSM boundary.
+Key material is defensively copied and zeroed when the Provider is closed (via `Close()`, DEK clearing, KMS provider intermediate buffers). However, Go's `crypto/aes` expands key bytes into an internal round-key schedule at cipher creation time and does not expose a way to zero that schedule. This means copies of key material may persist in heap memory until garbage-collected, even after `Close()` is called. This is a known limitation of the Go standard library and applies to all Go programs using `crypto/aes`. For threat models requiring guaranteed key erasure, use a hardware security module (HSM).
+
+## Known Gaps
+
+- **Automatic key rotation outside the Vault KV provider.** The Vault KV provider has a built-in poller (`WithKeyVersionRefreshInterval`). The AWS/GCP/Azure/GPG providers do not — callers who want rotation for those backends must build a new Provider periodically and swap it, or construct a `RotatingProvider` manually and drive `AddKey`/`SetCurrentKey` themselves. A follow-up may add parity.

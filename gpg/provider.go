@@ -1,8 +1,9 @@
-// Package gpg provides a KeyProvider that decrypts AES-256 keys using GPG.
+// Package gpg provides a crypto.Provider that decrypts AES-256 keys using GPG.
 //
-// Keys are stored as GPG-encrypted blobs (ASCII-armored or binary). At construction
-// time, each blob is decrypted via the provided Client and the plaintext key material
-// is cached in a StaticKeyProvider. The Client is not retained after construction.
+// Keys are stored as GPG-encrypted blobs (ASCII-armored or binary). At
+// construction time each blob is decrypted via the provided Client and the
+// plaintext key material is cached. The Client is not retained after
+// construction.
 //
 // This provider is suited for non-server deployments where keys are distributed
 // as GPG-encrypted files alongside the application — no KMS service required.
@@ -69,15 +70,15 @@ func WithEncryptedKey(ciphertext []byte, id string) Option {
 	}
 }
 
-// New creates a KeyProvider that decrypts key material using GPG.
+// New creates a crypto.Provider that decrypts key material using GPG.
 //
 // At least one key must be provided via WithEncryptedKey. The first key is the
 // current key for new encryptions; additional keys support decryption during
 // key rotation.
 //
-// All keys are decrypted during construction and cached in a StaticKeyProvider.
-// The Client is not retained after construction.
-func New(ctx context.Context, client Client, opts ...Option) (*crypto.StaticKeyProvider, error) {
+// All keys are decrypted during construction and cached. The Client is not
+// retained after construction.
+func New(ctx context.Context, client Client, opts ...Option) (crypto.Provider, error) {
 	var o options
 	for _, opt := range opts {
 		opt(&o)
@@ -102,21 +103,20 @@ func New(ctx context.Context, client Client, opts ...Option) (*crypto.StaticKeyP
 		if err != nil {
 			return nil, fmt.Errorf("gpg: failed to decrypt key %q: %w", ek.id, err)
 		}
-		if len(plaintext) != 32 { // must be AES-256
+		if len(plaintext) != 32 {
 			return nil, fmt.Errorf("gpg: decrypted key %q is %d bytes, want 32", ek.id, len(plaintext))
 		}
 		keys = append(keys, decryptedKey{bytes: plaintext, id: ek.id})
 	}
 
-	var staticOpts []crypto.StaticOption
+	var providerOpts []crypto.Option
 	for _, k := range keys[1:] {
-		staticOpts = append(staticOpts, crypto.WithOldKey(k.bytes, k.id))
+		providerOpts = append(providerOpts, crypto.WithOldKey(k.bytes, k.id))
 	}
 
-	provider, err := crypto.NewStaticKeyProvider(keys[0].bytes, keys[0].id, staticOpts...)
+	provider, err := crypto.NewProvider(keys[0].bytes, keys[0].id, providerOpts...)
 	if err != nil {
 		return nil, fmt.Errorf("gpg: %w", err)
 	}
-
 	return provider, nil
 }

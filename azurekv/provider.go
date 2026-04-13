@@ -1,4 +1,4 @@
-// Package azurekv provides a KeyProvider backed by Azure Key Vault.
+// Package azurekv provides a crypto.Provider backed by Azure Key Vault.
 //
 // Keys are fetched from Key Vault at construction time and cached in memory.
 // The provider uses the UnwrapKey operation to decrypt key material that was
@@ -72,15 +72,15 @@ func WithWrappedKeyAlgorithm(ciphertext []byte, id, keyName, keyVersion string, 
 	}
 }
 
-// New creates a KeyProvider that unwraps keys using Azure Key Vault.
+// New creates a crypto.Provider that unwraps keys using Azure Key Vault.
 //
-// At least one key must be provided via WithWrappedKey.
-// The first key is the current key for new encryptions; additional keys
-// are available for decryption (key rotation).
+// At least one key must be provided via WithWrappedKey. The first key is the
+// current key for new encryptions; additional keys are available for
+// decryption (key rotation).
 //
-// Keys are unwrapped during construction and cached in a StaticKeyProvider.
-// The Key Vault client is not retained after construction.
-func New(ctx context.Context, client Client, opts ...Option) (*crypto.StaticKeyProvider, error) {
+// Keys are unwrapped during construction and cached. The Key Vault client is
+// not retained after construction.
+func New(ctx context.Context, client Client, opts ...Option) (crypto.Provider, error) {
 	var o options
 	for _, opt := range opts {
 		opt(&o)
@@ -108,22 +108,20 @@ func New(ctx context.Context, client Client, opts ...Option) (*crypto.StaticKeyP
 		if err != nil {
 			return nil, fmt.Errorf("azurekv: failed to unwrap key %q: %w", wk.id, err)
 		}
-		if len(resp.Result) != 32 { // must be AES-256
+		if len(resp.Result) != 32 {
 			return nil, fmt.Errorf("azurekv: unwrapped key %q is %d bytes, want 32", wk.id, len(resp.Result))
 		}
-
 		keys = append(keys, decryptedKey{bytes: resp.Result, id: wk.id})
 	}
 
-	var staticOpts []crypto.StaticOption
+	var providerOpts []crypto.Option
 	for _, k := range keys[1:] {
-		staticOpts = append(staticOpts, crypto.WithOldKey(k.bytes, k.id))
+		providerOpts = append(providerOpts, crypto.WithOldKey(k.bytes, k.id))
 	}
 
-	provider, err := crypto.NewStaticKeyProvider(keys[0].bytes, keys[0].id, staticOpts...)
+	provider, err := crypto.NewProvider(keys[0].bytes, keys[0].id, providerOpts...)
 	if err != nil {
 		return nil, fmt.Errorf("azurekv: %w", err)
 	}
-
 	return provider, nil
 }

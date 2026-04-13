@@ -1,4 +1,4 @@
-// Package gcpkms provides a KeyProvider backed by Google Cloud KMS.
+// Package gcpkms provides a crypto.Provider backed by Google Cloud KMS.
 //
 // Keys are fetched from Cloud KMS at construction time and cached in memory.
 // The provider uses the CryptoKeys.Decrypt RPC to unwrap encrypted key material.
@@ -51,15 +51,16 @@ func WithEncryptedKey(ciphertext []byte, id, resourceName string) Option {
 	}
 }
 
-// New creates a KeyProvider that unwraps encrypted keys using Google Cloud KMS.
+// New creates a crypto.Provider that unwraps encrypted keys using Google
+// Cloud KMS.
 //
-// At least one key must be provided via WithEncryptedKey.
-// The first key is the current key for new encryptions; additional keys
-// are available for decryption (key rotation).
+// At least one key must be provided via WithEncryptedKey. The first key is
+// the current key for new encryptions; additional keys are available for
+// decryption (key rotation).
 //
-// Keys are decrypted during construction and cached in a StaticKeyProvider.
-// The KMS client is not retained after construction.
-func New(ctx context.Context, client Client, opts ...Option) (*crypto.StaticKeyProvider, error) {
+// Keys are decrypted during construction and cached. The KMS client is not
+// retained after construction.
+func New(ctx context.Context, client Client, opts ...Option) (crypto.Provider, error) {
 	var o options
 	for _, opt := range opts {
 		opt(&o)
@@ -87,22 +88,20 @@ func New(ctx context.Context, client Client, opts ...Option) (*crypto.StaticKeyP
 		if err != nil {
 			return nil, fmt.Errorf("gcpkms: failed to decrypt key %q: %w", ek.id, err)
 		}
-		if len(resp.Plaintext) != 32 { // must be AES-256
+		if len(resp.Plaintext) != 32 {
 			return nil, fmt.Errorf("gcpkms: decrypted key %q is %d bytes, want 32", ek.id, len(resp.Plaintext))
 		}
-
 		keys = append(keys, decryptedKey{bytes: resp.Plaintext, id: ek.id})
 	}
 
-	var staticOpts []crypto.StaticOption
+	var providerOpts []crypto.Option
 	for _, k := range keys[1:] {
-		staticOpts = append(staticOpts, crypto.WithOldKey(k.bytes, k.id))
+		providerOpts = append(providerOpts, crypto.WithOldKey(k.bytes, k.id))
 	}
 
-	provider, err := crypto.NewStaticKeyProvider(keys[0].bytes, keys[0].id, staticOpts...)
+	provider, err := crypto.NewProvider(keys[0].bytes, keys[0].id, providerOpts...)
 	if err != nil {
 		return nil, fmt.Errorf("gcpkms: %w", err)
 	}
-
 	return provider, nil
 }

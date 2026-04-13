@@ -30,10 +30,8 @@ github.com/pkg/browser v0.0.0-20240102092130-5ac0b6a4141c h1:+mdjkGKdHQG3305AYmd
 github.com/pkg/browser v0.0.0-20240102092130-5ac0b6a4141c/go.mod h1:7rwL4CYBLnjLxUqIJNnCWiEdr3bn6IUYi15bNlnbCCU=
 github.com/pmezard/go-difflib v1.0.0 h1:4DBwDE0NGyQoBHbLQYPwSUPoCMWR5BEzIk/f1lZbAQM=
 github.com/pmezard/go-difflib v1.0.0/go.mod h1:iKH77koFhYxTK1pcRnkKkqfTogsbg7gZNVY4sRDYZ/4=
-github.com/rbaliyan/config v0.5.4 h1:Fr1PfxxB/535uu02c3SyFBXqlJ65A/JoWchxhc76mAE=
-github.com/rbaliyan/config v0.5.4/go.mod h1:IoksA5g0XM1wfALEdW7rRibB/9tCYeOhN7lH897d5w8=
-github.com/rbaliyan/config-crypto v0.2.5 h1:IctCqRMsOPUp3iXUnF9uRT3nHnKRmNs3h0UWI+evAPs=
-github.com/rbaliyan/config-crypto v0.2.5/go.mod h1:c616pcLeRceR2nOqPf9t5X8TI7fyE1cWmXPWu9Q8i1o=
+github.com/rbaliyan/config v0.6.0 h1:jISVZcp0QciCoKj6/FPicznfKL+fFs0iisRU4Q14rNo=
+github.com/rbaliyan/config v0.6.0/go.mod h1:Nax4I1rmQL6l7UTyUCkd6AquuYjv6BrI8L0uoGCTf7I=
 github.com/stretchr/testify v1.11.1 h1:7s2iGBzp5EwR7/aIZr8ao5+dra3wiQyKjjFuvgVKu7U=
 github.com/stretchr/testify v1.11.1/go.mod h1:wZwfW3scLgRK+23gO65QZefKpKQRnfz6sD981Nm4B6U=
 golang.org/x/crypto v0.49.0 h1:+Ng2ULVvLHnJ/ZFEq4KdcDd/cfjrrjjNSXNzxg0Y4U4=
