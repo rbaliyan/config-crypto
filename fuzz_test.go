@@ -5,6 +5,17 @@ import (
 	"testing"
 )
 
+// fuzzKey is a local copy of a simple 32-byte key builder. Inlined rather
+// than referencing the helper in helpers_test.go because compile_native_go_fuzzer
+// only compiles the file containing the target fuzz function.
+func fuzzKey() []byte {
+	k := make([]byte, 32)
+	for i := range k {
+		k[i] = byte(i)
+	}
+	return k
+}
+
 func FuzzReadHeader(f *testing.F) {
 	// v1 seeds.
 	f.Add([]byte("EC\x01\x01\x00" + string(make([]byte, 72))))
@@ -26,7 +37,7 @@ func FuzzReadHeader(f *testing.F) {
 }
 
 func FuzzDecrypt(f *testing.F) {
-	keyBytes := makeKey(32)
+	keyBytes := fuzzKey()
 	p, err := NewProvider(keyBytes, "fuzz-key")
 	if err != nil {
 		f.Fatal(err)
@@ -54,7 +65,7 @@ func FuzzEncryptDecryptRoundTrip(f *testing.F) {
 	f.Add(make([]byte, 1024))
 	f.Add([]byte{0xff, 0xfe, 0x00, 0x01})
 
-	keyBytes := makeKey(32)
+	keyBytes := fuzzKey()
 	p, err := NewProvider(keyBytes, "roundtrip-key")
 	if err != nil {
 		f.Fatal(err)

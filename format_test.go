@@ -61,12 +61,13 @@ func TestHeaderV2RoundTrip(t *testing.T) {
 // intentionally changes (which would itself be a data-compat break).
 //
 // Fixture inputs (fed to generateDeterministicV1):
-//   keyBytes  = makeKey(32) (bytes 0..31)
-//   keyID     = "v1-key"
-//   plaintext = "legacy-v1"
-//   DEK       = 32 × 0xAA
-//   dekNonce  = 12 × 0xBB
-//   dataNonce = 12 × 0xCC
+//
+//	keyBytes  = makeKey(32) (bytes 0..31)
+//	keyID     = "v1-key"
+//	plaintext = "legacy-v1"
+//	DEK       = 32 × 0xAA
+//	dekNonce  = 12 × 0xBB
+//	dataNonce = 12 × 0xCC
 const goldenV1Hex = "454301010676312d6b6579bbbbbbbbbbbbbbbbbbbbbbbb" +
 	"29d6588500c2ed4dbe80c41e10152b89626d776d9d4ac9f0013eb392f9e8c8d0" +
 	"21e82530098ddd465a258d0fb7ee3d9a" +

@@ -261,8 +261,8 @@ func runKVPoll(ctx context.Context, client Client, rp *crypto.RotatingProvider, 
 	ticker := time.NewTicker(o.refreshInterval)
 	defer ticker.Stop()
 
-	failed := make(map[int]struct{})  // versions we've permanently given up on
-	retries := make(map[int]int)      // in-flight retry counter per version
+	failed := make(map[int]struct{}) // versions we've permanently given up on
+	retries := make(map[int]int)     // in-flight retry counter per version
 
 	for {
 		select {

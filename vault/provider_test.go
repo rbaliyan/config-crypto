@@ -405,4 +405,3 @@ func TestNew_BadKeyMaterial(t *testing.T) {
 		}
 	})
 }
-
