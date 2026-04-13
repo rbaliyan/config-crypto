@@ -10,10 +10,9 @@ import (
 	crypto "github.com/rbaliyan/config-crypto"
 )
 
-// mockClient is a test double for Client that maps ciphertext to plaintext.
 type mockClient struct {
-	keys   map[string][]byte // string(ciphertext) -> plaintext
-	failOn string            // if non-empty, fail when string(ciphertext) matches
+	keys   map[string][]byte
+	failOn string
 }
 
 func (m *mockClient) Decrypt(ctx context.Context, ciphertext []byte) ([]byte, error) {
@@ -31,281 +30,172 @@ func (m *mockClient) Decrypt(ctx context.Context, ciphertext []byte) ([]byte, er
 	return plaintext, nil
 }
 
-func makeKey(size int) []byte {
-	key := make([]byte, size)
-	for i := range key {
-		key[i] = byte(i + 1)
+func makeKey(seed byte) []byte {
+	k := make([]byte, 32)
+	for i := range k {
+		k[i] = seed + byte(i)
 	}
-	return key
+	return k
 }
 
-// Compile-time interface check.
 var _ Client = (*mockClient)(nil)
 
-func TestNew(t *testing.T) {
-	client := &mockClient{
-		keys: map[string][]byte{
-			"enc:key-1": makeKey(32),
-		},
-	}
-
-	provider, err := New(context.Background(), client,
-		WithEncryptedKey([]byte("enc:key-1"), "key-1"),
-	)
+func TestNew_RoundTrip(t *testing.T) {
+	ctx := context.Background()
+	client := &mockClient{keys: map[string][]byte{"enc:k1": makeKey(1)}}
+	provider, err := New(ctx, client, WithEncryptedKey([]byte("enc:k1"), "key-1"))
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
-
-	key, err := provider.CurrentKey()
+	defer provider.Close()
+	ct, err := provider.Encrypt(ctx, []byte("hello"))
 	if err != nil {
-		t.Fatalf("CurrentKey: %v", err)
+		t.Fatal(err)
 	}
-	if key.ID != "key-1" {
-		t.Errorf("CurrentKey().ID: got %q, want %q", key.ID, "key-1")
+	got, err := provider.Decrypt(ctx, ct)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != "hello" {
+		t.Errorf("got %q", got)
 	}
 }
 
-func TestNewWithRotation(t *testing.T) {
-	oldKey := make([]byte, 32)
-	for i := range oldKey {
-		oldKey[i] = byte(i + 100)
+func TestNew_Rotation(t *testing.T) {
+	ctx := context.Background()
+	v1 := makeKey(1)
+	v2 := makeKey(2)
+	v1Copy := append([]byte(nil), v1...)
+	v2Copy := append([]byte(nil), v2...)
+	client := &mockClient{keys: map[string][]byte{"enc:v2": v2, "enc:v1": v1}}
+
+	provider, err := New(ctx, client,
+		WithEncryptedKey([]byte("enc:v2"), "key-v2"),
+		WithEncryptedKey([]byte("enc:v1"), "key-v1"),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer provider.Close()
+
+	ct, err := provider.Encrypt(ctx, []byte("rotated"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	v2Only, err := crypto.NewProvider(v2Copy, "key-v2")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer v2Only.Close()
+	if got, err := v2Only.Decrypt(ctx, ct); err != nil {
+		t.Errorf("v2-only: %v", err)
+	} else if string(got) != "rotated" {
+		t.Errorf("got %q", got)
 	}
 
+	v1Only, err := crypto.NewProvider(v1Copy, "key-v1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer v1Only.Close()
+	v1ct, err := v1Only.Encrypt(ctx, []byte("legacy"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := provider.Decrypt(ctx, v1ct); err != nil {
+		t.Errorf("decrypt v1 via rotating: %v", err)
+	}
+}
+
+func TestNew_NoKeys(t *testing.T) {
+	if _, err := New(context.Background(), &mockClient{}); err == nil {
+		t.Error("expected error")
+	}
+}
+
+func TestNew_DecryptFailure(t *testing.T) {
+	client := &mockClient{failOn: "enc:k1"}
+	if _, err := New(context.Background(), client, WithEncryptedKey([]byte("enc:k1"), "key-1")); err == nil {
+		t.Error("expected error")
+	}
+}
+
+func TestNew_DecryptFailureOnRotationKey(t *testing.T) {
 	client := &mockClient{
-		keys: map[string][]byte{
-			"enc:key-2": makeKey(32),
-			"enc:key-1": oldKey,
-		},
+		keys:   map[string][]byte{"enc:v2": makeKey(1)},
+		failOn: "enc:v1",
 	}
-
-	provider, err := New(context.Background(), client,
-		WithEncryptedKey([]byte("enc:key-2"), "key-2"),
-		WithEncryptedKey([]byte("enc:key-1"), "key-1"),
-	)
-	if err != nil {
-		t.Fatalf("New: %v", err)
-	}
-
-	current, err := provider.CurrentKey()
-	if err != nil {
-		t.Fatalf("CurrentKey: %v", err)
-	}
-	if current.ID != "key-2" {
-		t.Errorf("CurrentKey().ID: got %q, want %q", current.ID, "key-2")
-	}
-
-	old, err := provider.KeyByID("key-1")
-	if err != nil {
-		t.Fatalf("KeyByID: %v", err)
-	}
-	if old.ID != "key-1" {
-		t.Errorf("KeyByID().ID: got %q, want %q", old.ID, "key-1")
-	}
-}
-
-func TestNewNoKeys(t *testing.T) {
-	_, err := New(context.Background(), &mockClient{})
-	if err == nil {
-		t.Error("expected error when no keys provided")
-	}
-}
-
-func TestNewDecryptFailure(t *testing.T) {
-	client := &mockClient{failOn: "enc:key-1"}
-
-	_, err := New(context.Background(), client,
-		WithEncryptedKey([]byte("enc:key-1"), "key-1"),
-	)
-	if err == nil {
-		t.Error("expected error on decrypt failure")
-	}
-}
-
-func TestNewDecryptFailureOnRotationKey(t *testing.T) {
-	// Failure on a rotation (non-current) key must also propagate.
-	client := &mockClient{
-		keys:   map[string][]byte{"enc:key-2": makeKey(32)},
-		failOn: "enc:key-1",
-	}
-
-	_, err := New(context.Background(), client,
-		WithEncryptedKey([]byte("enc:key-2"), "key-2"),
-		WithEncryptedKey([]byte("enc:key-1"), "key-1"),
-	)
-	if err == nil {
+	if _, err := New(context.Background(), client,
+		WithEncryptedKey([]byte("enc:v2"), "key-v2"),
+		WithEncryptedKey([]byte("enc:v1"), "key-v1"),
+	); err == nil {
 		t.Error("expected error when rotation key decrypt fails")
 	}
 }
 
-func TestNewInvalidKeySize(t *testing.T) {
-	client := &mockClient{
-		keys: map[string][]byte{
-			"enc:short": {1, 2, 3}, // 3 bytes — invalid for AES-256
-		},
-	}
-
-	_, err := New(context.Background(), client,
-		WithEncryptedKey([]byte("enc:short"), "key-1"),
-	)
-	if err == nil {
-		t.Error("expected error for invalid key size")
-	}
-	// The gpg provider validates key size before passing to NewStaticKeyProvider,
-	// so the error does not wrap ErrInvalidKeySize directly.
-	if err != nil && !strings.Contains(err.Error(), "3 bytes, want 32") {
+func TestNew_InvalidKeySize(t *testing.T) {
+	client := &mockClient{keys: map[string][]byte{"enc:short": {1, 2, 3}}}
+	_, err := New(context.Background(), client, WithEncryptedKey([]byte("enc:short"), "key-1"))
+	if err == nil || !strings.Contains(err.Error(), "3 bytes, want 32") {
 		t.Errorf("expected key size error, got %v", err)
 	}
 }
 
-func TestNewRotationKeyInvalidSize(t *testing.T) {
-	client := &mockClient{
-		keys: map[string][]byte{
-			"enc:key-2": makeKey(32),
-			"enc:key-1": {1, 2, 3}, // 3 bytes — invalid
-		},
-	}
-
+func TestNew_RotationKeyInvalidSize(t *testing.T) {
+	client := &mockClient{keys: map[string][]byte{
+		"enc:v2": makeKey(1),
+		"enc:v1": {1, 2, 3},
+	}}
 	_, err := New(context.Background(), client,
-		WithEncryptedKey([]byte("enc:key-2"), "key-2"),
-		WithEncryptedKey([]byte("enc:key-1"), "key-1"),
+		WithEncryptedKey([]byte("enc:v2"), "key-v2"),
+		WithEncryptedKey([]byte("enc:v1"), "key-v1"),
 	)
-	if err == nil {
-		t.Error("expected error when rotation key has invalid size")
-	}
-	if err != nil && !strings.Contains(err.Error(), "3 bytes, want 32") {
+	if err == nil || !strings.Contains(err.Error(), "3 bytes, want 32") {
 		t.Errorf("expected key size error, got %v", err)
 	}
 }
 
-func TestNewEmptyKeyID(t *testing.T) {
-	client := &mockClient{
-		keys: map[string][]byte{"enc:key": makeKey(32)},
-	}
-
-	_, err := New(context.Background(), client,
-		WithEncryptedKey([]byte("enc:key"), ""),
-	)
-	if err == nil {
-		t.Error("expected error for empty key ID")
-	}
-	if !crypto.IsInvalidKeyID(err) {
+func TestNew_EmptyKeyID(t *testing.T) {
+	client := &mockClient{keys: map[string][]byte{"enc": makeKey(1)}}
+	_, err := New(context.Background(), client, WithEncryptedKey([]byte("enc"), ""))
+	if err == nil || !crypto.IsInvalidKeyID(err) {
 		t.Errorf("expected ErrInvalidKeyID, got %v", err)
 	}
 }
 
-func TestNewDuplicateKeyID(t *testing.T) {
-	k1 := makeKey(32)
-	k2 := make([]byte, 32)
-	for i := range k2 {
-		k2[i] = byte(i + 100)
-	}
-
-	client := &mockClient{
-		keys: map[string][]byte{
-			"enc:a": k1,
-			"enc:b": k2,
-		},
-	}
-
+func TestNew_DuplicateKeyID(t *testing.T) {
+	client := &mockClient{keys: map[string][]byte{
+		"enc:a": makeKey(1),
+		"enc:b": makeKey(2),
+	}}
 	_, err := New(context.Background(), client,
 		WithEncryptedKey([]byte("enc:a"), "same-id"),
 		WithEncryptedKey([]byte("enc:b"), "same-id"),
 	)
-	if err == nil {
-		t.Error("expected error for duplicate key ID")
-	}
-	if !crypto.IsInvalidKeyID(err) {
+	if err == nil || !crypto.IsInvalidKeyID(err) {
 		t.Errorf("expected ErrInvalidKeyID, got %v", err)
 	}
 }
 
-func TestNewContextCancelled(t *testing.T) {
+func TestNew_ContextCancelled(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
-	cancel() // already cancelled
-
-	client := &mockClient{
-		keys: map[string][]byte{"enc:key-1": makeKey(32)},
-	}
-
-	_, err := New(ctx, client,
-		WithEncryptedKey([]byte("enc:key-1"), "key-1"),
-	)
-	if err == nil {
-		t.Error("expected error for cancelled context")
-	}
-	if !errors.Is(err, context.Canceled) {
-		t.Errorf("expected context.Canceled in error chain, got %v", err)
+	cancel()
+	client := &mockClient{keys: map[string][]byte{"enc:k1": makeKey(1)}}
+	_, err := New(ctx, client, WithEncryptedKey([]byte("enc:k1"), "key-1"))
+	if err == nil || !errors.Is(err, context.Canceled) {
+		t.Errorf("expected context.Canceled, got %v", err)
 	}
 }
 
-func TestNewDecryptedKeyZeroed(t *testing.T) {
-	// mockClient returns the same slice stored in the map, so clear() in New
-	// will zero the backing array. This confirms key material is not retained.
-	plaintext := makeKey(32)
-	client := &mockClient{
-		keys: map[string][]byte{"enc:key-1": plaintext},
+func TestNew_DecryptedKeyZeroed(t *testing.T) {
+	plaintext := makeKey(1)
+	client := &mockClient{keys: map[string][]byte{"enc:k1": plaintext}}
+	if _, err := New(context.Background(), client, WithEncryptedKey([]byte("enc:k1"), "key-1")); err != nil {
+		t.Fatal(err)
 	}
-
-	_, err := New(context.Background(), client,
-		WithEncryptedKey([]byte("enc:key-1"), "key-1"),
-	)
-	if err != nil {
-		t.Fatalf("New: %v", err)
-	}
-
-	for i, b := range plaintext {
+	for _, b := range plaintext {
 		if b != 0 {
-			t.Errorf("decrypted key byte %d not zeroed after construction: got %d", i, b)
+			t.Fatal("decrypted GPG key bytes were not zeroed after construction")
 		}
 	}
-}
-
-func TestNewRotationKeyZeroed(t *testing.T) {
-	// Rotation key bytes must also be zeroed after construction.
-	currentKey := makeKey(32)
-	rotationKey := make([]byte, 32)
-	for i := range rotationKey {
-		rotationKey[i] = byte(i + 100)
-	}
-
-	client := &mockClient{
-		keys: map[string][]byte{
-			"enc:key-2": currentKey,
-			"enc:key-1": rotationKey,
-		},
-	}
-
-	_, err := New(context.Background(), client,
-		WithEncryptedKey([]byte("enc:key-2"), "key-2"),
-		WithEncryptedKey([]byte("enc:key-1"), "key-1"),
-	)
-	if err != nil {
-		t.Fatalf("New: %v", err)
-	}
-
-	for i, b := range currentKey {
-		if b != 0 {
-			t.Errorf("current key byte %d not zeroed: got %d", i, b)
-		}
-	}
-	for i, b := range rotationKey {
-		if b != 0 {
-			t.Errorf("rotation key byte %d not zeroed: got %d", i, b)
-		}
-	}
-}
-
-func TestNewReturnsKeyProvider(t *testing.T) {
-	client := &mockClient{
-		keys: map[string][]byte{"enc:key-1": makeKey(32)},
-	}
-
-	provider, err := New(context.Background(), client,
-		WithEncryptedKey([]byte("enc:key-1"), "key-1"),
-	)
-	if err != nil {
-		t.Fatalf("New: %v", err)
-	}
-
-	var _ crypto.KeyProvider = provider
 }

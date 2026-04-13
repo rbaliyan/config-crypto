@@ -12,6 +12,7 @@ require (
 	github.com/aws/aws-sdk-go-v2/internal/configsources v1.4.21 // indirect
 	github.com/aws/aws-sdk-go-v2/internal/endpoints/v2 v2.7.21 // indirect
 	github.com/aws/smithy-go v1.24.2 // indirect
-	github.com/hashicorp/golang-lru/v2 v2.0.7 // indirect
-	github.com/rbaliyan/config v0.5.1 // indirect
+	github.com/rbaliyan/config v0.6.0 // indirect
 )
+
+replace github.com/rbaliyan/config-crypto => ../

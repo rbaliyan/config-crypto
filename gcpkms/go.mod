@@ -9,8 +9,7 @@ require (
 
 require (
 	cloud.google.com/go/longrunning v0.9.0 // indirect
-	github.com/hashicorp/golang-lru/v2 v2.0.7 // indirect
-	github.com/rbaliyan/config v0.5.1 // indirect
+	github.com/rbaliyan/config v0.6.0 // indirect
 	golang.org/x/net v0.52.0 // indirect
 	golang.org/x/sys v0.42.0 // indirect
 	golang.org/x/text v0.35.0 // indirect
@@ -19,3 +18,5 @@ require (
 	google.golang.org/grpc v1.80.0 // indirect
 	google.golang.org/protobuf v1.36.11 // indirect
 )
+
+replace github.com/rbaliyan/config-crypto => ../

@@ -1,6 +1,7 @@
 package crypto
 
 import (
+	"context"
 	"fmt"
 
 	"github.com/rbaliyan/config/codec"
@@ -10,11 +11,11 @@ import (
 // On Encode, the inner codec serializes the value, then the result is encrypted.
 // On Decode, the data is decrypted, then the inner codec deserializes the plaintext.
 //
-// Codec is safe for concurrent use if the underlying KeyProvider and inner codec are safe
-// for concurrent use. StaticKeyProvider satisfies this requirement.
+// Codec is safe for concurrent use if the underlying Provider and inner codec are safe
+// for concurrent use.
 type Codec struct {
 	inner    codec.Codec
-	provider KeyProvider
+	provider Provider
 	name     string
 }
 
@@ -24,8 +25,8 @@ var (
 	_ codec.Transformer = (*Codec)(nil)
 )
 
-// Option configures NewCodec behavior.
-type Option func(*codecOptions)
+// CodecOption configures NewCodec behavior.
+type CodecOption func(*codecOptions)
 
 type codecOptions struct {
 	prefix string
@@ -34,14 +35,14 @@ type codecOptions struct {
 // WithClientCodec prefixes the codec name with "client:" so the config-server
 // recognises it as a client-managed codec and passes the bytes through
 // without attempting to decode them. This is shorthand for WithCodecPrefix("client").
-func WithClientCodec() Option {
+func WithClientCodec() CodecOption {
 	return WithCodecPrefix("client")
 }
 
 // WithCodecPrefix adds a custom prefix to the codec name.
 // The resulting name is "<prefix>:encrypted:<inner>".
 // Use this when you need a prefix other than the standard "client:".
-func WithCodecPrefix(prefix string) Option {
+func WithCodecPrefix(prefix string) CodecOption {
 	return func(o *codecOptions) {
 		o.prefix = prefix
 	}
@@ -51,11 +52,11 @@ func WithCodecPrefix(prefix string) Option {
 // The codec name is "encrypted:<inner>", e.g. "encrypted:json".
 // With WithClientCodec the name becomes "client:encrypted:<inner>".
 // Returns an error if inner or provider is nil.
-func NewCodec(inner codec.Codec, provider KeyProvider, opts ...Option) (*Codec, error) {
+func NewCodec(inner codec.Codec, p Provider, opts ...CodecOption) (*Codec, error) {
 	if inner == nil {
 		return nil, fmt.Errorf("crypto: NewCodec inner codec is nil")
 	}
-	if provider == nil {
+	if p == nil {
 		return nil, fmt.Errorf("crypto: NewCodec provider is nil")
 	}
 
@@ -71,7 +72,7 @@ func NewCodec(inner codec.Codec, provider KeyProvider, opts ...Option) (*Codec, 
 
 	return &Codec{
 		inner:    inner,
-		provider: provider,
+		provider: p,
 		name:     name,
 	}, nil
 }
@@ -82,29 +83,27 @@ func (c *Codec) Name() string {
 }
 
 // Encode serializes the value using the inner codec, then encrypts the result.
-func (c *Codec) Encode(v any) ([]byte, error) {
-	plaintext, err := c.inner.Encode(v)
+func (c *Codec) Encode(ctx context.Context, v any) ([]byte, error) {
+	plaintext, err := c.inner.Encode(ctx, v)
 	if err != nil {
 		return nil, fmt.Errorf("crypto: inner encode failed: %w", err)
 	}
 
-	key, err := c.provider.CurrentKey()
+	ciphertext, err := c.provider.Encrypt(ctx, plaintext)
 	if err != nil {
-		return nil, fmt.Errorf("crypto: failed to get current key: %w", err)
+		return nil, fmt.Errorf("crypto: encrypt failed: %w", err)
 	}
-	defer clear(key.Bytes)
-
-	return encrypt(plaintext, key)
+	return ciphertext, nil
 }
 
 // Decode decrypts the data, then deserializes the plaintext using the inner codec.
-func (c *Codec) Decode(data []byte, v any) error {
-	plaintext, err := decrypt(data, c.provider)
+func (c *Codec) Decode(ctx context.Context, data []byte, v any) error {
+	plaintext, err := c.provider.Decrypt(ctx, data)
 	if err != nil {
 		return fmt.Errorf("crypto: decrypt failed: %w", err)
 	}
 
-	if err := c.inner.Decode(plaintext, v); err != nil {
+	if err := c.inner.Decode(ctx, plaintext, v); err != nil {
 		return fmt.Errorf("crypto: inner decode failed: %w", err)
 	}
 	return nil
@@ -112,17 +111,12 @@ func (c *Codec) Decode(data []byte, v any) error {
 
 // Transform encrypts the raw bytes using envelope encryption.
 // This implements codec.Transformer for use with codec.NewChain.
-func (c *Codec) Transform(data []byte) ([]byte, error) {
-	key, err := c.provider.CurrentKey()
-	if err != nil {
-		return nil, fmt.Errorf("crypto: failed to get current key: %w", err)
-	}
-	defer clear(key.Bytes)
-	return encrypt(data, key)
+func (c *Codec) Transform(ctx context.Context, data []byte) ([]byte, error) {
+	return c.provider.Encrypt(ctx, data)
 }
 
 // Reverse decrypts the raw bytes, recovering the original plaintext.
 // This implements codec.Transformer for use with codec.NewChain.
-func (c *Codec) Reverse(data []byte) ([]byte, error) {
-	return decrypt(data, c.provider)
+func (c *Codec) Reverse(ctx context.Context, data []byte) ([]byte, error) {
+	return c.provider.Decrypt(ctx, data)
 }

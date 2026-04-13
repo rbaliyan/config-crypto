@@ -10,11 +10,11 @@ import (
 )
 
 type mockClient struct {
-	keys   map[string][]byte // ciphertext -> plaintext
+	keys   map[string][]byte
 	failOn string
 }
 
-func (m *mockClient) Decrypt(ctx context.Context, req *kmspb.DecryptRequest) (*kmspb.DecryptResponse, error) {
+func (m *mockClient) Decrypt(_ context.Context, req *kmspb.DecryptRequest) (*kmspb.DecryptResponse, error) {
 	ct := string(req.Ciphertext)
 	if ct == m.failOn {
 		return nil, fmt.Errorf("kms: permission denied")
@@ -26,133 +26,107 @@ func (m *mockClient) Decrypt(ctx context.Context, req *kmspb.DecryptRequest) (*k
 	return &kmspb.DecryptResponse{Plaintext: plaintext}, nil
 }
 
-func makeKey(size int) []byte {
-	key := make([]byte, size)
-	for i := range key {
-		key[i] = byte(i)
+func makeKey(seed byte) []byte {
+	k := make([]byte, 32)
+	for i := range k {
+		k[i] = seed + byte(i)
 	}
-	return key
+	return k
 }
 
-func TestNew(t *testing.T) {
-	client := &mockClient{
-		keys: map[string][]byte{
-			"encrypted-key-1": makeKey(32),
-		},
-	}
+const resourceName = "projects/p/locations/l/keyRings/r/cryptoKeys/k"
 
-	provider, err := New(context.Background(), client,
-		WithEncryptedKey([]byte("encrypted-key-1"), "key-1", "projects/p/locations/l/keyRings/r/cryptoKeys/k"),
-	)
+func TestNew_RoundTrip(t *testing.T) {
+	ctx := context.Background()
+	client := &mockClient{keys: map[string][]byte{"enc-1": makeKey(1)}}
+	provider, err := New(ctx, client, WithEncryptedKey([]byte("enc-1"), "key-1", resourceName))
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
-
-	key, err := provider.CurrentKey()
-	if err != nil {
-		t.Fatalf("CurrentKey: %v", err)
-	}
-	if key.ID != "key-1" {
-		t.Errorf("CurrentKey().ID: got %q, want %q", key.ID, "key-1")
-	}
-}
-
-func TestNewWithRotation(t *testing.T) {
-	client := &mockClient{
-		keys: map[string][]byte{
-			"encrypted-new": makeKey(32),
-			"encrypted-old": func() []byte {
-				k := make([]byte, 32)
-				for i := range k {
-					k[i] = byte(i + 100)
-				}
-				return k
-			}(),
-		},
-	}
-
-	provider, err := New(context.Background(), client,
-		WithEncryptedKey([]byte("encrypted-new"), "key-v2", "projects/p/locations/l/keyRings/r/cryptoKeys/k"),
-		WithEncryptedKey([]byte("encrypted-old"), "key-v1", "projects/p/locations/l/keyRings/r/cryptoKeys/k"),
-	)
-	if err != nil {
-		t.Fatalf("New: %v", err)
-	}
-
-	current, err := provider.CurrentKey()
+	defer provider.Close()
+	ct, err := provider.Encrypt(ctx, []byte("hello"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if current.ID != "key-v2" {
-		t.Errorf("CurrentKey().ID: got %q, want %q", current.ID, "key-v2")
-	}
-
-	old, err := provider.KeyByID("key-v1")
+	got, err := provider.Decrypt(ctx, ct)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if old.ID != "key-v1" {
-		t.Errorf("KeyByID().ID: got %q, want %q", old.ID, "key-v1")
+	if string(got) != "hello" {
+		t.Errorf("got %q", got)
 	}
 }
 
-func TestNewNoKeys(t *testing.T) {
-	_, err := New(context.Background(), &mockClient{})
-	if err == nil {
-		t.Error("expected error for no keys")
-	}
-}
+func TestNew_Rotation(t *testing.T) {
+	ctx := context.Background()
+	v1 := makeKey(1)
+	v2 := makeKey(2)
+	v1Copy := append([]byte(nil), v1...)
+	v2Copy := append([]byte(nil), v2...)
+	client := &mockClient{keys: map[string][]byte{"enc-v2": v2, "enc-v1": v1}}
 
-func TestNewDecryptFailure(t *testing.T) {
-	client := &mockClient{failOn: "encrypted-key-1"}
-
-	_, err := New(context.Background(), client,
-		WithEncryptedKey([]byte("encrypted-key-1"), "key-1", "projects/p/locations/l/keyRings/r/cryptoKeys/k"),
-	)
-	if err == nil {
-		t.Error("expected error for decrypt failure")
-	}
-}
-
-func TestNewDecryptedKeyZeroed(t *testing.T) {
-	plaintext := makeKey(32)
-	client := &mockClient{
-		keys: map[string][]byte{
-			"encrypted": plaintext,
-		},
-	}
-
-	_, err := New(context.Background(), client,
-		WithEncryptedKey([]byte("encrypted"), "key-1", "projects/p/locations/l/keyRings/r/cryptoKeys/k"),
+	provider, err := New(ctx, client,
+		WithEncryptedKey([]byte("enc-v2"), "key-v2", resourceName),
+		WithEncryptedKey([]byte("enc-v1"), "key-v1", resourceName),
 	)
 	if err != nil {
-		t.Fatalf("New: %v", err)
+		t.Fatal(err)
+	}
+	defer provider.Close()
+
+	// Current key is v2.
+	ct, err := provider.Encrypt(ctx, []byte("rotated"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	v2Only, err := crypto.NewProvider(v2Copy, "key-v2")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer v2Only.Close()
+	if got, err := v2Only.Decrypt(ctx, ct); err != nil {
+		t.Errorf("v2-only decrypt: %v", err)
+	} else if string(got) != "rotated" {
+		t.Errorf("got %q", got)
 	}
 
-	// The mock returns a direct reference, so we can verify zeroing
-	allZero := true
+	// v1 ciphertext decrypts via the rotating provider.
+	v1Only, err := crypto.NewProvider(v1Copy, "key-v1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer v1Only.Close()
+	v1ct, err := v1Only.Encrypt(ctx, []byte("legacy"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := provider.Decrypt(ctx, v1ct); err != nil {
+		t.Errorf("decrypt v1 via rotating: %v", err)
+	}
+}
+
+func TestNew_NoKeys(t *testing.T) {
+	if _, err := New(context.Background(), &mockClient{}); err == nil {
+		t.Error("expected error")
+	}
+}
+
+func TestNew_DecryptFailure(t *testing.T) {
+	client := &mockClient{failOn: "enc-1"}
+	if _, err := New(context.Background(), client, WithEncryptedKey([]byte("enc-1"), "key-1", resourceName)); err == nil {
+		t.Error("expected error")
+	}
+}
+
+func TestNew_DecryptedKeyZeroed(t *testing.T) {
+	plaintext := makeKey(1)
+	client := &mockClient{keys: map[string][]byte{"enc": plaintext}}
+	if _, err := New(context.Background(), client, WithEncryptedKey([]byte("enc"), "key-1", resourceName)); err != nil {
+		t.Fatal(err)
+	}
 	for _, b := range plaintext {
 		if b != 0 {
-			allZero = false
-			break
+			t.Fatal("decrypted KMS key bytes were not zeroed after construction")
 		}
 	}
-	if !allZero {
-		t.Error("decrypted key material was not zeroed after construction")
-	}
-}
-
-func TestNewReturnsKeyProvider(t *testing.T) {
-	client := &mockClient{
-		keys: map[string][]byte{"encrypted": makeKey(32)},
-	}
-
-	provider, err := New(context.Background(), client,
-		WithEncryptedKey([]byte("encrypted"), "key-1", "projects/p/locations/l/keyRings/r/cryptoKeys/k"),
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	var _ crypto.KeyProvider = provider
 }

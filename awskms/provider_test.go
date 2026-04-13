@@ -12,10 +12,10 @@ import (
 // mockClient implements Client for testing.
 type mockClient struct {
 	keys   map[string][]byte // ciphertext -> plaintext
-	failOn string            // ciphertext string to fail on
+	failOn string            // ciphertext to fail on
 }
 
-func (m *mockClient) Decrypt(ctx context.Context, params *kms.DecryptInput, optFns ...func(*kms.Options)) (*kms.DecryptOutput, error) {
+func (m *mockClient) Decrypt(_ context.Context, params *kms.DecryptInput, _ ...func(*kms.Options)) (*kms.DecryptOutput, error) {
 	ct := string(params.CiphertextBlob)
 	if ct == m.failOn {
 		return nil, fmt.Errorf("kms: access denied")
@@ -27,140 +27,126 @@ func (m *mockClient) Decrypt(ctx context.Context, params *kms.DecryptInput, optF
 	return &kms.DecryptOutput{Plaintext: plaintext}, nil
 }
 
-func makeKey(size int) []byte {
-	key := make([]byte, size)
-	for i := range key {
-		key[i] = byte(i)
+func makeKey(seed byte) []byte {
+	k := make([]byte, 32)
+	for i := range k {
+		k[i] = seed + byte(i)
 	}
-	return key
+	return k
 }
 
-func TestNew(t *testing.T) {
-	client := &mockClient{
-		keys: map[string][]byte{
-			"encrypted-key-1": makeKey(32),
-		},
+func TestNew_RoundTrip(t *testing.T) {
+	ctx := context.Background()
+	client := &mockClient{keys: map[string][]byte{"enc-1": makeKey(1)}}
+	provider, err := New(ctx, client, WithEncryptedKey([]byte("enc-1"), "key-1"))
+	if err != nil {
+		t.Fatalf("New: %v", err)
 	}
+	defer provider.Close()
 
-	provider, err := New(context.Background(), client,
-		WithEncryptedKey([]byte("encrypted-key-1"), "key-1"),
+	ct, err := provider.Encrypt(ctx, []byte("hello"))
+	if err != nil {
+		t.Fatalf("Encrypt: %v", err)
+	}
+	got, err := provider.Decrypt(ctx, ct)
+	if err != nil {
+		t.Fatalf("Decrypt: %v", err)
+	}
+	if string(got) != "hello" {
+		t.Errorf("got %q", got)
+	}
+}
+
+func TestNew_Rotation(t *testing.T) {
+	ctx := context.Background()
+	v1 := makeKey(1)
+	v2 := makeKey(2)
+	// Copy before passing to mock — awskms zeros the slices the mock returns.
+	v1Copy := append([]byte(nil), v1...)
+	v2Copy := append([]byte(nil), v2...)
+	client := &mockClient{keys: map[string][]byte{
+		"enc-v2": v2,
+		"enc-v1": v1,
+	}}
+
+	provider, err := New(ctx, client,
+		WithEncryptedKey([]byte("enc-v2"), "key-v2"),
+		WithEncryptedKey([]byte("enc-v1"), "key-v1"),
 	)
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
+	defer provider.Close()
 
-	key, err := provider.CurrentKey()
+	// Current is key-v2: encrypt → decrypts via standalone key-v2 provider.
+	ct, err := provider.Encrypt(ctx, []byte("rotated"))
 	if err != nil {
-		t.Fatalf("CurrentKey: %v", err)
+		t.Fatal(err)
 	}
-	if key.ID != "key-1" {
-		t.Errorf("CurrentKey().ID: got %q, want %q", key.ID, "key-1")
+	v2Only, err := crypto.NewProvider(v2Copy, "key-v2")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer v2Only.Close()
+	got, err := v2Only.Decrypt(ctx, ct)
+	if err != nil {
+		t.Fatalf("decrypt with v2-only: %v", err)
+	}
+	if string(got) != "rotated" {
+		t.Errorf("got %q", got)
+	}
+
+	// Old ciphertext (encrypted with v1 key directly) decrypts via the rotating provider.
+	v1Only, err := crypto.NewProvider(v1Copy, "key-v1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer v1Only.Close()
+	v1Cipher, err := v1Only.Encrypt(ctx, []byte("legacy"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, err := provider.Decrypt(ctx, v1Cipher); err != nil {
+		t.Errorf("decrypt v1 via rotating: %v", err)
+	} else if string(got) != "legacy" {
+		t.Errorf("got %q", got)
 	}
 }
 
-func TestNewWithRotation(t *testing.T) {
-	oldKey := makeKey(32)
-	newKey := make([]byte, 32)
-	for i := range newKey {
-		newKey[i] = byte(i + 100)
-	}
-
-	client := &mockClient{
-		keys: map[string][]byte{
-			"encrypted-new": newKey,
-			"encrypted-old": oldKey,
-		},
-	}
-
-	provider, err := New(context.Background(), client,
-		WithEncryptedKey([]byte("encrypted-new"), "key-v2"),
-		WithEncryptedKey([]byte("encrypted-old"), "key-v1"),
-	)
-	if err != nil {
-		t.Fatalf("New: %v", err)
-	}
-
-	// Current key should be the first one
-	current, err := provider.CurrentKey()
-	if err != nil {
-		t.Fatalf("CurrentKey: %v", err)
-	}
-	if current.ID != "key-v2" {
-		t.Errorf("CurrentKey().ID: got %q, want %q", current.ID, "key-v2")
-	}
-
-	// Old key should be accessible
-	old, err := provider.KeyByID("key-v1")
-	if err != nil {
-		t.Fatalf("KeyByID: %v", err)
-	}
-	if old.ID != "key-v1" {
-		t.Errorf("KeyByID().ID: got %q, want %q", old.ID, "key-v1")
-	}
-}
-
-func TestNewNoKeys(t *testing.T) {
-	client := &mockClient{}
-
-	_, err := New(context.Background(), client)
-	if err == nil {
+func TestNew_NoKeys(t *testing.T) {
+	if _, err := New(context.Background(), &mockClient{}); err == nil {
 		t.Error("expected error for no keys")
 	}
 }
 
-func TestNewDecryptFailure(t *testing.T) {
-	client := &mockClient{
-		failOn: "encrypted-key-1",
-	}
-
-	_, err := New(context.Background(), client,
-		WithEncryptedKey([]byte("encrypted-key-1"), "key-1"),
-	)
-	if err == nil {
+func TestNew_DecryptFailure(t *testing.T) {
+	client := &mockClient{failOn: "enc-1"}
+	if _, err := New(context.Background(), client, WithEncryptedKey([]byte("enc-1"), "key-1")); err == nil {
 		t.Error("expected error for decrypt failure")
 	}
 }
 
-func TestNewWithKMSKeyID(t *testing.T) {
-	client := &mockClient{
-		keys: map[string][]byte{
-			"encrypted-key-1": makeKey(32),
-		},
-	}
-
-	provider, err := New(context.Background(), client,
-		WithEncryptedKeyForKMSKey([]byte("encrypted-key-1"), "key-1", "arn:aws:kms:us-east-1:123:key/abc"),
+func TestNew_WithKMSKeyID(t *testing.T) {
+	ctx := context.Background()
+	client := &mockClient{keys: map[string][]byte{"enc-1": makeKey(1)}}
+	provider, err := New(ctx, client,
+		WithEncryptedKeyForKMSKey([]byte("enc-1"), "key-1", "arn:aws:kms:us-east-1:123:key/abc"),
 	)
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
-
-	key, err := provider.CurrentKey()
-	if err != nil {
-		t.Fatalf("CurrentKey: %v", err)
-	}
-	if key.ID != "key-1" {
-		t.Errorf("got %q, want %q", key.ID, "key-1")
+	defer provider.Close()
+	if _, err := provider.Encrypt(ctx, []byte("x")); err != nil {
+		t.Errorf("Encrypt: %v", err)
 	}
 }
 
-func TestNewDecryptedKeyZeroed(t *testing.T) {
-	plaintext := makeKey(32)
-	client := &mockClient{
-		keys: map[string][]byte{
-			"encrypted": plaintext,
-		},
-	}
-
-	_, err := New(context.Background(), client,
-		WithEncryptedKey([]byte("encrypted"), "key-1"),
-	)
-	if err != nil {
+func TestNew_DecryptedKeyZeroed(t *testing.T) {
+	plaintext := makeKey(1)
+	client := &mockClient{keys: map[string][]byte{"enc": plaintext}}
+	if _, err := New(context.Background(), client, WithEncryptedKey([]byte("enc"), "key-1")); err != nil {
 		t.Fatalf("New: %v", err)
 	}
-
-	// The provider copies the bytes, so the original plaintext from KMS should be zeroed
-	// Note: the mock returns a direct reference, so we can verify zeroing
 	allZero := true
 	for _, b := range plaintext {
 		if b != 0 {
@@ -169,24 +155,6 @@ func TestNewDecryptedKeyZeroed(t *testing.T) {
 		}
 	}
 	if !allZero {
-		t.Error("decrypted key material was not zeroed after construction")
+		t.Error("decrypted KMS key bytes were not zeroed after construction")
 	}
-}
-
-func TestNewReturnsKeyProvider(t *testing.T) {
-	client := &mockClient{
-		keys: map[string][]byte{
-			"encrypted": makeKey(32),
-		},
-	}
-
-	provider, err := New(context.Background(), client,
-		WithEncryptedKey([]byte("encrypted"), "key-1"),
-	)
-	if err != nil {
-		t.Fatalf("New: %v", err)
-	}
-
-	// Verify it satisfies KeyProvider interface
-	var _ crypto.KeyProvider = provider
 }

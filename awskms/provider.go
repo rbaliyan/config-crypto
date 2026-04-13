@@ -1,4 +1,4 @@
-// Package awskms provides a KeyProvider backed by AWS KMS.
+// Package awskms provides a crypto.Provider backed by AWS KMS.
 //
 // Keys are fetched from KMS at construction time and cached in memory.
 // The provider uses AWS KMS Decrypt to unwrap encrypted key material
@@ -38,7 +38,6 @@ type encryptedKeyEntry struct {
 	ciphertext []byte
 	id         string
 	kmsKeyID   string // KMS key ARN or alias; empty = let KMS determine
-	current    bool
 }
 
 // WithEncryptedKey adds an encrypted key to be unwrapped via KMS Decrypt.
@@ -67,15 +66,15 @@ func WithEncryptedKeyForKMSKey(ciphertext []byte, id, kmsKeyID string) Option {
 	}
 }
 
-// New creates a KeyProvider that unwraps encrypted keys using AWS KMS.
+// New creates a crypto.Provider that unwraps encrypted keys using AWS KMS.
 //
-// At least one key must be provided via WithEncryptedKey or WithEncryptedKeyForKMSKey.
-// The first key added becomes the current key for new encryptions; additional keys
-// are available for decryption (key rotation).
+// At least one key must be provided via WithEncryptedKey or
+// WithEncryptedKeyForKMSKey. The first key added becomes the current key for
+// new encryptions; additional keys are available for decryption (key rotation).
 //
-// Keys are decrypted during construction and cached in a StaticKeyProvider.
-// The KMS client is not retained after construction.
-func New(ctx context.Context, client Client, opts ...Option) (*crypto.StaticKeyProvider, error) {
+// Keys are decrypted during construction and cached. The KMS client is not
+// retained after construction.
+func New(ctx context.Context, client Client, opts ...Option) (crypto.Provider, error) {
 	var o options
 	for _, opt := range opts {
 		opt(&o)
@@ -85,7 +84,6 @@ func New(ctx context.Context, client Client, opts ...Option) (*crypto.StaticKeyP
 		return nil, fmt.Errorf("awskms: at least one encrypted key is required")
 	}
 
-	// Decrypt all keys
 	type decryptedKey struct {
 		bytes []byte
 		id    string
@@ -97,34 +95,28 @@ func New(ctx context.Context, client Client, opts ...Option) (*crypto.StaticKeyP
 		}
 	}()
 	for _, ek := range o.encryptedKeys {
-		input := &kms.DecryptInput{
-			CiphertextBlob: ek.ciphertext,
-		}
+		input := &kms.DecryptInput{CiphertextBlob: ek.ciphertext}
 		if ek.kmsKeyID != "" {
 			input.KeyId = &ek.kmsKeyID
 		}
-
 		out, err := client.Decrypt(ctx, input)
 		if err != nil {
 			return nil, fmt.Errorf("awskms: failed to decrypt key %q: %w", ek.id, err)
 		}
-		if len(out.Plaintext) != 32 { // must be AES-256
+		if len(out.Plaintext) != 32 {
 			return nil, fmt.Errorf("awskms: decrypted key %q is %d bytes, want 32", ek.id, len(out.Plaintext))
 		}
-
 		keys = append(keys, decryptedKey{bytes: out.Plaintext, id: ek.id})
 	}
 
-	// First key is current; rest are old keys for rotation
-	var staticOpts []crypto.StaticOption
+	var providerOpts []crypto.Option
 	for _, k := range keys[1:] {
-		staticOpts = append(staticOpts, crypto.WithOldKey(k.bytes, k.id))
+		providerOpts = append(providerOpts, crypto.WithOldKey(k.bytes, k.id))
 	}
 
-	provider, err := crypto.NewStaticKeyProvider(keys[0].bytes, keys[0].id, staticOpts...)
+	provider, err := crypto.NewProvider(keys[0].bytes, keys[0].id, providerOpts...)
 	if err != nil {
 		return nil, fmt.Errorf("awskms: %w", err)
 	}
-
 	return provider, nil
 }

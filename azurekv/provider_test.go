@@ -10,11 +10,11 @@ import (
 )
 
 type mockClient struct {
-	keys   map[string][]byte // ciphertext -> plaintext
+	keys   map[string][]byte
 	failOn string
 }
 
-func (m *mockClient) UnwrapKey(ctx context.Context, keyName string, keyVersion string, params azkeys.KeyOperationParameters, opts *azkeys.UnwrapKeyOptions) (azkeys.UnwrapKeyResponse, error) {
+func (m *mockClient) UnwrapKey(_ context.Context, _ string, _ string, params azkeys.KeyOperationParameters, _ *azkeys.UnwrapKeyOptions) (azkeys.UnwrapKeyResponse, error) {
 	ct := string(params.Value)
 	if ct == m.failOn {
 		return azkeys.UnwrapKeyResponse{}, fmt.Errorf("keyvault: access denied")
@@ -23,139 +23,117 @@ func (m *mockClient) UnwrapKey(ctx context.Context, keyName string, keyVersion s
 	if !ok {
 		return azkeys.UnwrapKeyResponse{}, fmt.Errorf("keyvault: invalid ciphertext")
 	}
-	return azkeys.UnwrapKeyResponse{
-		KeyOperationResult: azkeys.KeyOperationResult{
-			Result: plaintext,
-		},
-	}, nil
+	return azkeys.UnwrapKeyResponse{KeyOperationResult: azkeys.KeyOperationResult{Result: plaintext}}, nil
 }
 
-func makeKey(size int) []byte {
-	key := make([]byte, size)
-	for i := range key {
-		key[i] = byte(i)
+func makeKey(seed byte) []byte {
+	k := make([]byte, 32)
+	for i := range k {
+		k[i] = seed + byte(i)
 	}
-	return key
+	return k
 }
 
-func TestNew(t *testing.T) {
-	client := &mockClient{
-		keys: map[string][]byte{
-			"wrapped-key-1": makeKey(32),
-		},
-	}
-
-	provider, err := New(context.Background(), client,
-		WithWrappedKey([]byte("wrapped-key-1"), "key-1", "my-key", "v1"),
-	)
+func TestNew_RoundTrip(t *testing.T) {
+	ctx := context.Background()
+	client := &mockClient{keys: map[string][]byte{"wrap-1": makeKey(1)}}
+	provider, err := New(ctx, client, WithWrappedKey([]byte("wrap-1"), "key-1", "my-key", "v1"))
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
-
-	key, err := provider.CurrentKey()
-	if err != nil {
-		t.Fatalf("CurrentKey: %v", err)
-	}
-	if key.ID != "key-1" {
-		t.Errorf("CurrentKey().ID: got %q, want %q", key.ID, "key-1")
-	}
-}
-
-func TestNewWithRotation(t *testing.T) {
-	client := &mockClient{
-		keys: map[string][]byte{
-			"wrapped-new": makeKey(32),
-			"wrapped-old": func() []byte {
-				k := make([]byte, 32)
-				for i := range k {
-					k[i] = byte(i + 100)
-				}
-				return k
-			}(),
-		},
-	}
-
-	provider, err := New(context.Background(), client,
-		WithWrappedKey([]byte("wrapped-new"), "key-v2", "my-key", "v2"),
-		WithWrappedKey([]byte("wrapped-old"), "key-v1", "my-key", "v1"),
-	)
-	if err != nil {
-		t.Fatalf("New: %v", err)
-	}
-
-	current, err := provider.CurrentKey()
+	defer provider.Close()
+	ct, err := provider.Encrypt(ctx, []byte("hello"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if current.ID != "key-v2" {
-		t.Errorf("CurrentKey().ID: got %q, want %q", current.ID, "key-v2")
-	}
-
-	old, err := provider.KeyByID("key-v1")
+	got, err := provider.Decrypt(ctx, ct)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if old.ID != "key-v1" {
-		t.Errorf("KeyByID().ID: got %q, want %q", old.ID, "key-v1")
+	if string(got) != "hello" {
+		t.Errorf("got %q", got)
 	}
 }
 
-func TestNewNoKeys(t *testing.T) {
-	_, err := New(context.Background(), &mockClient{})
-	if err == nil {
-		t.Error("expected error for no keys")
-	}
-}
+func TestNew_Rotation(t *testing.T) {
+	ctx := context.Background()
+	v1 := makeKey(1)
+	v2 := makeKey(2)
+	v1Copy := append([]byte(nil), v1...)
+	v2Copy := append([]byte(nil), v2...)
+	client := &mockClient{keys: map[string][]byte{"wrap-v2": v2, "wrap-v1": v1}}
 
-func TestNewUnwrapFailure(t *testing.T) {
-	client := &mockClient{failOn: "wrapped-key-1"}
-
-	_, err := New(context.Background(), client,
-		WithWrappedKey([]byte("wrapped-key-1"), "key-1", "my-key", "v1"),
-	)
-	if err == nil {
-		t.Error("expected error for unwrap failure")
-	}
-}
-
-func TestNewDecryptedKeyZeroed(t *testing.T) {
-	plaintext := makeKey(32)
-	client := &mockClient{
-		keys: map[string][]byte{
-			"wrapped": plaintext,
-		},
-	}
-
-	_, err := New(context.Background(), client,
-		WithWrappedKey([]byte("wrapped"), "key-1", "my-key", "v1"),
+	provider, err := New(ctx, client,
+		WithWrappedKey([]byte("wrap-v2"), "key-v2", "my-key", "v2"),
+		WithWrappedKey([]byte("wrap-v1"), "key-v1", "my-key", "v1"),
 	)
 	if err != nil {
-		t.Fatalf("New: %v", err)
+		t.Fatal(err)
+	}
+	defer provider.Close()
+
+	ct, err := provider.Encrypt(ctx, []byte("rotated"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	v2Only, err := crypto.NewProvider(v2Copy, "key-v2")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer v2Only.Close()
+	if got, err := v2Only.Decrypt(ctx, ct); err != nil {
+		t.Errorf("v2-only: %v", err)
+	} else if string(got) != "rotated" {
+		t.Errorf("got %q", got)
 	}
 
-	allZero := true
+	v1Only, err := crypto.NewProvider(v1Copy, "key-v1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer v1Only.Close()
+	v1ct, err := v1Only.Encrypt(ctx, []byte("legacy"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := provider.Decrypt(ctx, v1ct); err != nil {
+		t.Errorf("decrypt v1 via rotating: %v", err)
+	}
+}
+
+func TestNew_NoKeys(t *testing.T) {
+	if _, err := New(context.Background(), &mockClient{}); err == nil {
+		t.Error("expected error")
+	}
+}
+
+func TestNew_UnwrapFailure(t *testing.T) {
+	client := &mockClient{failOn: "wrap-1"}
+	if _, err := New(context.Background(), client, WithWrappedKey([]byte("wrap-1"), "key-1", "my-key", "v1")); err == nil {
+		t.Error("expected error")
+	}
+}
+
+func TestNew_DecryptedKeyZeroed(t *testing.T) {
+	plaintext := makeKey(1)
+	client := &mockClient{keys: map[string][]byte{"wrap": plaintext}}
+	if _, err := New(context.Background(), client, WithWrappedKey([]byte("wrap"), "key-1", "my-key", "v1")); err != nil {
+		t.Fatal(err)
+	}
 	for _, b := range plaintext {
 		if b != 0 {
-			allZero = false
-			break
+			t.Fatal("unwrapped key bytes were not zeroed after construction")
 		}
-	}
-	if !allZero {
-		t.Error("decrypted key material was not zeroed after construction")
 	}
 }
 
-func TestNewWithAlgorithm(t *testing.T) {
-	client := &mockClient{
-		keys: map[string][]byte{"wrapped": makeKey(32)},
-	}
-
+func TestNew_WithAlgorithm(t *testing.T) {
+	client := &mockClient{keys: map[string][]byte{"wrap": makeKey(1)}}
 	provider, err := New(context.Background(), client,
-		WithWrappedKeyAlgorithm([]byte("wrapped"), "key-1", "my-key", "v1", azkeys.EncryptionAlgorithmRSAOAEP),
+		WithWrappedKeyAlgorithm([]byte("wrap"), "key-1", "my-key", "v1", azkeys.EncryptionAlgorithmRSAOAEP),
 	)
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
-
-	var _ crypto.KeyProvider = provider
+	defer provider.Close()
 }
