@@ -102,7 +102,7 @@ func ExampleNewProvider_rotation() {
 	for i := range newKey {
 		newKey[i] = byte(i + 100)
 	}
-	newP, err := crypto.NewProvider(newKey, "key-v2", crypto.WithOldKey(oldKey, "key-v1"))
+	newP, err := crypto.NewProvider(newKey, "key-v2", crypto.WithOldKey(oldKey, "key-v1", 0))
 	if err != nil {
 		panic(err)
 	}

@@ -24,9 +24,10 @@ func mustNewProvider(t testing.TB, keyBytes []byte, id string, opts ...Option) P
 }
 
 // mustNewRotatingProvider builds a RotatingProvider or fatals.
-func mustNewRotatingProvider(t testing.TB, keyBytes []byte, id string, opts ...Option) *RotatingProvider {
+// rank is the KV store version for the initial key; pass 0 when ordering is not needed.
+func mustNewRotatingProvider(t testing.TB, keyBytes []byte, id string, rank uint64, opts ...Option) *RotatingProvider {
 	t.Helper()
-	p, err := NewRotatingProvider(keyBytes, id, opts...)
+	p, err := NewRotatingProvider(keyBytes, id, rank, opts...)
 	if err != nil {
 		t.Fatalf("NewRotatingProvider: %v", err)
 	}

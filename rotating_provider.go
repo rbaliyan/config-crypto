@@ -24,9 +24,13 @@ var _ Provider = (*RotatingProvider)(nil)
 
 // NewRotatingProvider creates a mutable Provider with the given initial key.
 // The keyBytes must be 32 bytes for AES-256. The id identifies this key.
-// Old keys can be added with WithOldKey for rotation support.
+// rank is the KV store version number for this key (e.g. the Vault KV version
+// integer cast to uint64); it is used by NeedsReencryption to determine
+// whether a given ciphertext was encrypted with an older key. Use 0 when the
+// backing store does not provide version ordering.
+// Old keys can be added with WithOldKey; pass the KV version as rank.
 // Key bytes are copied internally; the caller may safely zero the original after construction.
-func NewRotatingProvider(initialBytes []byte, id string, opts ...Option) (*RotatingProvider, error) {
+func NewRotatingProvider(initialBytes []byte, id string, rank uint64, opts ...Option) (*RotatingProvider, error) {
 	if len(initialBytes) != aesKeySize {
 		return nil, fmt.Errorf("%w: got %d bytes", ErrInvalidKeySize, len(initialBytes))
 	}
@@ -42,19 +46,18 @@ func NewRotatingProvider(initialBytes []byte, id string, opts ...Option) (*Rotat
 		return nil, o.err
 	}
 
-	b := make([]byte, aesKeySize)
-	copy(b, initialBytes)
-	current := keyEntry{id: id, bytes: b}
-
 	keys := make(map[string]keyEntry, 1+len(o.oldKeys))
-	keys[id] = current
-
 	for _, old := range o.oldKeys {
 		if _, exists := keys[old.id]; exists {
 			return nil, fmt.Errorf("%w: duplicate key ID %q", ErrInvalidKeyID, old.id)
 		}
-		keys[old.id] = keyEntry{id: old.id, bytes: old.bytes}
+		keys[old.id] = keyEntry{id: old.id, bytes: old.bytes, generation: old.rank}
 	}
+
+	b := make([]byte, aesKeySize)
+	copy(b, initialBytes)
+	current := keyEntry{id: id, bytes: b, generation: rank}
+	keys[id] = current
 
 	return &RotatingProvider{
 		current: current,
@@ -112,8 +115,12 @@ func (p *RotatingProvider) Close() error {
 
 // AddKey adds a key that can be used for decryption or set as the current key.
 // The keyBytes must be 32 bytes for AES-256 and id must not be empty.
+// rank is the KV store version number for this key; it is used by
+// NeedsReencryption to establish ordering across restarts. Pass the same
+// value that the backing store (e.g. Vault KV version) provides so that
+// the ordering is stable even after a process restart.
 // Key bytes are copied internally.
-func (p *RotatingProvider) AddKey(keyBytes []byte, id string) error {
+func (p *RotatingProvider) AddKey(keyBytes []byte, id string, rank uint64) error {
 	if len(keyBytes) != aesKeySize {
 		return fmt.Errorf("%w: key %q has %d bytes", ErrInvalidKeySize, id, len(keyBytes))
 	}
@@ -129,7 +136,7 @@ func (p *RotatingProvider) AddKey(keyBytes []byte, id string) error {
 	if p.closed {
 		return ErrProviderClosed
 	}
-	p.keys[id] = keyEntry{id: id, bytes: b}
+	p.keys[id] = keyEntry{id: id, bytes: b, generation: rank}
 	return nil
 }
 
@@ -149,7 +156,7 @@ func (p *RotatingProvider) SetCurrentKey(id string) error {
 	// Copy so current and keys[id] don't share backing array.
 	cb := make([]byte, len(k.bytes))
 	copy(cb, k.bytes)
-	p.current = keyEntry{id: k.id, bytes: cb}
+	p.current = keyEntry{id: k.id, bytes: cb, generation: k.generation}
 	return nil
 }
 
@@ -172,6 +179,44 @@ func (p *RotatingProvider) RemoveKey(id string) error {
 	clear(k.bytes)
 	delete(p.keys, id)
 	return nil
+}
+
+// CurrentKeyID returns the ID of the key currently used for encryption.
+func (p *RotatingProvider) CurrentKeyID() string {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	return p.current.id
+}
+
+// NeedsReencryption reports whether ciphertext was encrypted with a key that
+// is older than the current key, based on the rank (KV store version) recorded
+// when each key was added. It returns true only when the current key has a
+// strictly higher rank than the key embedded in the ciphertext header, so
+// instances that have not yet rotated to a newer key will not re-encrypt
+// backwards during a rolling restart.
+//
+// It returns false (not true) when the ciphertext key is unknown to this
+// provider, since ordering cannot be determined in that case.
+// It returns an error only if the ciphertext header cannot be parsed.
+func (p *RotatingProvider) NeedsReencryption(ciphertext []byte) (bool, error) {
+	h, _, err := readHeader(ciphertext)
+	if err != nil {
+		return false, err
+	}
+
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+
+	if h.keyID == p.current.id {
+		return false, nil
+	}
+
+	k, ok := p.keys[h.keyID]
+	if !ok {
+		return false, nil
+	}
+
+	return k.generation < p.current.generation, nil
 }
 
 // keyByID returns a copy of key bytes for the given ID. Caller must hold at least a read lock.
