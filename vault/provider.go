@@ -154,6 +154,9 @@ func New(ctx context.Context, client Client, mount, path string, opts ...Option)
 	}
 
 	// Build a RotatingProvider with current key and old-key options.
+	// KV version numbers are used as ranks so that NeedsReencryption ordering
+	// is stable across process restarts (Vault versions are monotonically
+	// increasing and persistent, unlike an in-process counter).
 	currentID := o.keyIDFormat(current)
 	var currentBytes []byte
 	dynOpts := make([]crypto.Option, 0, len(keys)-1)
@@ -162,10 +165,10 @@ func New(ctx context.Context, client Client, mount, path string, opts ...Option)
 			currentBytes = k.bytes
 			continue
 		}
-		dynOpts = append(dynOpts, crypto.WithOldKey(k.bytes, k.id))
+		dynOpts = append(dynOpts, crypto.WithOldKey(k.bytes, k.id, uint64(k.version))) // #nosec G115 -- Vault KV versions are always positive
 	}
 
-	rp, err := crypto.NewRotatingProvider(currentBytes, currentID, dynOpts...)
+	rp, err := crypto.NewRotatingProvider(currentBytes, currentID, uint64(current), dynOpts...) // #nosec G115 -- Vault KV versions are always positive
 	if err != nil {
 		return nil, fmt.Errorf("vault: build rotating provider: %w", err)
 	}
@@ -303,7 +306,7 @@ func runKVPoll(ctx context.Context, client Client, rp *crypto.RotatingProvider, 
 				continue
 			}
 			id := o.keyIDFormat(v)
-			err = rp.AddKey(keyBytes, id)
+			err = rp.AddKey(keyBytes, id, uint64(v)) // #nosec G115 -- Vault KV versions are always positive
 			clear(keyBytes)
 			if err != nil {
 				if crypto.IsProviderClosed(err) {

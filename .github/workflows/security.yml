@@ -28,10 +28,13 @@ jobs:
       - name: Run govulncheck
         run: |
           govulncheck ./...
-          cd awskms && govulncheck ./...
-          cd ../gcpkms && govulncheck ./...
-          cd ../azurekv && govulncheck ./...
-          cd ../vault && govulncheck ./...
+          for mod in awskms gcpkms azurekv vault; do
+            cd $mod
+            go mod edit -replace github.com/rbaliyan/config-crypto=../
+            go mod tidy
+            govulncheck ./...
+            cd ..
+          done
 
   gosec:
     name: GoSec (${{ matrix.module }})
@@ -60,6 +63,8 @@ jobs:
             gosec -fmt sarif -out gosec-results.sarif -severity medium -confidence medium -exclude-dir=awskms -exclude-dir=gcpkms -exclude-dir=azurekv -exclude-dir=vault -exclude-dir=gpg ./...
           else
             cd ${{ matrix.module }}
+            go mod edit -replace github.com/rbaliyan/config-crypto=../
+            go mod tidy
             gosec -fmt sarif -out ../gosec-results.sarif -severity medium -confidence medium ./...
           fi
 

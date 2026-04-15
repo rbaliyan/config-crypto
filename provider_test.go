@@ -46,7 +46,7 @@ func TestNewProvider_OldKeyDecryptsLegacy(t *testing.T) {
 	}
 
 	// New provider has both keys; current is "v2".
-	p, err := NewProvider(newer, "v2", WithOldKey(old, "v1"))
+	p, err := NewProvider(newer, "v2", WithOldKey(old, "v1", 0))
 	if err != nil {
 		t.Fatalf("NewProvider with old key: %v", err)
 	}
@@ -71,9 +71,9 @@ func TestNewProvider_Validation(t *testing.T) {
 		{"short key", makeKey(16), "id", nil},
 		{"long key", makeKey(64), "id", nil},
 		{"empty id", makeKey(32), "", nil},
-		{"old key bad size", makeKey(32), "id", []Option{WithOldKey(makeKey(16), "old")}},
-		{"old key empty id", makeKey(32), "id", []Option{WithOldKey(makeKey(32), "")}},
-		{"duplicate id", makeKey(32), "k", []Option{WithOldKey(makeKey(32), "k")}},
+		{"old key bad size", makeKey(32), "id", []Option{WithOldKey(makeKey(16), "old", 0)}},
+		{"old key empty id", makeKey(32), "id", []Option{WithOldKey(makeKey(32), "", 0)}},
+		{"duplicate id", makeKey(32), "k", []Option{WithOldKey(makeKey(32), "k", 0)}},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -145,7 +145,7 @@ func TestNewProvider_KeyBytesIsolated(t *testing.T) {
 }
 
 func TestRotatingProvider_AddSetRemoveCurrent(t *testing.T) {
-	rp := mustNewRotatingProvider(t, makeKey(32), "v1")
+	rp := mustNewRotatingProvider(t, makeKey(32), "v1", 1)
 	ctx := context.Background()
 
 	// Encrypt with v1.
@@ -159,7 +159,7 @@ func TestRotatingProvider_AddSetRemoveCurrent(t *testing.T) {
 	for i := range v2 {
 		v2[i] ^= 0xaa
 	}
-	if err := rp.AddKey(v2, "v2"); err != nil {
+	if err := rp.AddKey(v2, "v2", 2); err != nil {
 		t.Fatalf("AddKey: %v", err)
 	}
 	if err := rp.SetCurrentKey("v2"); err != nil {
@@ -201,24 +201,24 @@ func TestRotatingProvider_AddSetRemoveCurrent(t *testing.T) {
 }
 
 func TestRotatingProvider_SetCurrentKeyUnknown(t *testing.T) {
-	rp := mustNewRotatingProvider(t, makeKey(32), "v1")
+	rp := mustNewRotatingProvider(t, makeKey(32), "v1", 0)
 	if err := rp.SetCurrentKey("nonexistent"); !errors.Is(err, ErrKeyNotFound) {
 		t.Errorf("got %v, want ErrKeyNotFound", err)
 	}
 }
 
 func TestRotatingProvider_AddKeyValidation(t *testing.T) {
-	rp := mustNewRotatingProvider(t, makeKey(32), "v1")
-	if err := rp.AddKey(makeKey(16), "bad"); !errors.Is(err, ErrInvalidKeySize) {
+	rp := mustNewRotatingProvider(t, makeKey(32), "v1", 0)
+	if err := rp.AddKey(makeKey(16), "bad", 0); !errors.Is(err, ErrInvalidKeySize) {
 		t.Errorf("AddKey bad size: got %v, want ErrInvalidKeySize", err)
 	}
-	if err := rp.AddKey(makeKey(32), ""); !errors.Is(err, ErrInvalidKeyID) {
+	if err := rp.AddKey(makeKey(32), "", 0); !errors.Is(err, ErrInvalidKeyID) {
 		t.Errorf("AddKey empty id: got %v, want ErrInvalidKeyID", err)
 	}
 }
 
 func TestRotatingProvider_Close(t *testing.T) {
-	rp, err := NewRotatingProvider(makeKey(32), "v1")
+	rp, err := NewRotatingProvider(makeKey(32), "v1", 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -228,7 +228,7 @@ func TestRotatingProvider_Close(t *testing.T) {
 	for _, fn := range []func() error{
 		func() error { _, e := rp.Encrypt(context.Background(), []byte("x")); return e },
 		func() error { _, e := rp.Decrypt(context.Background(), []byte("x")); return e },
-		func() error { return rp.AddKey(makeKey(32), "v2") },
+		func() error { return rp.AddKey(makeKey(32), "v2", 0) },
 		func() error { return rp.SetCurrentKey("v1") },
 		func() error { return rp.RemoveKey("v1") },
 	} {
@@ -239,7 +239,7 @@ func TestRotatingProvider_Close(t *testing.T) {
 }
 
 func TestRotatingProvider_Concurrent(t *testing.T) {
-	rp := mustNewRotatingProvider(t, makeKey(32), "v1")
+	rp := mustNewRotatingProvider(t, makeKey(32), "v1", 0)
 	ctx := context.Background()
 
 	var wg sync.WaitGroup
@@ -254,7 +254,7 @@ func TestRotatingProvider_Concurrent(t *testing.T) {
 		go func(n int) {
 			defer wg.Done()
 			id := "v" + string(rune('A'+n%26))
-			_ = rp.AddKey(makeKey(32), id) // may already exist
+			_ = rp.AddKey(makeKey(32), id, 0) // may already exist
 		}(i)
 	}
 	wg.Wait()

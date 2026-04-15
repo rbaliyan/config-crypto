@@ -157,7 +157,7 @@ func TestCodecKeyRotation(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	newP := mustNewProvider(t, newKey, "key-v2", WithOldKey(oldKey, "key-v1"))
+	newP := mustNewProvider(t, newKey, "key-v2", WithOldKey(oldKey, "key-v1", 0))
 	newCodec, err := NewCodec(jsoncodec.New(), newP)
 	if err != nil {
 		t.Fatal(err)

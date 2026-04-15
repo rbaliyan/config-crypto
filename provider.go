@@ -37,11 +37,18 @@ type providerOptions struct {
 type oldKeyEntry struct {
 	bytes []byte
 	id    string
+	rank  uint64
 }
 
 // WithOldKey adds a previous key for decryption during key rotation.
 // The keyBytes must be 32 bytes for AES-256 and id must not be empty.
-func WithOldKey(keyBytes []byte, id string) Option {
+// rank is the KV store version number for this key (e.g. the Vault KV version
+// integer cast to uint64). NeedsReencryption on RotatingProvider uses rank to
+// determine whether the current key is newer than the key embedded in a
+// ciphertext, preventing instances with older keys from re-encrypting
+// backwards during a rolling restart. Pass 0 when the backing store does not
+// provide version ordering.
+func WithOldKey(keyBytes []byte, id string, rank uint64) Option {
 	return func(o *providerOptions) {
 		if o.err != nil {
 			return
@@ -56,7 +63,7 @@ func WithOldKey(keyBytes []byte, id string) Option {
 		}
 		b := make([]byte, aesKeySize)
 		copy(b, keyBytes)
-		o.oldKeys = append(o.oldKeys, oldKeyEntry{bytes: b, id: id})
+		o.oldKeys = append(o.oldKeys, oldKeyEntry{bytes: b, id: id, rank: rank})
 	}
 }
 
@@ -89,7 +96,7 @@ func NewProvider(keyBytes []byte, id string, opts ...Option) (Provider, error) {
 		if _, exists := keys[old.id]; exists {
 			return nil, fmt.Errorf("%w: duplicate key ID %q", ErrInvalidKeyID, old.id)
 		}
-		keys[old.id] = keyEntry{id: old.id, bytes: old.bytes}
+		keys[old.id] = keyEntry{id: old.id, bytes: old.bytes, generation: old.rank}
 	}
 
 	return &staticProvider{
@@ -100,8 +107,9 @@ func NewProvider(keyBytes []byte, id string, opts ...Option) (Provider, error) {
 
 // keyEntry holds key material for internal use.
 type keyEntry struct {
-	id    string
-	bytes []byte
+	id         string
+	bytes      []byte
+	generation uint64 // monotonically increasing; higher means newer
 }
 
 // staticProvider is an immutable Provider backed by in-memory keys.

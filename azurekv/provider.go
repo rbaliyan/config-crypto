@@ -116,7 +116,7 @@ func New(ctx context.Context, client Client, opts ...Option) (crypto.Provider, e
 
 	var providerOpts []crypto.Option
 	for _, k := range keys[1:] {
-		providerOpts = append(providerOpts, crypto.WithOldKey(k.bytes, k.id))
+		providerOpts = append(providerOpts, crypto.WithOldKey(k.bytes, k.id, 0))
 	}
 
 	provider, err := crypto.NewProvider(keys[0].bytes, keys[0].id, providerOpts...)
