@@ -4,7 +4,7 @@ go 1.25.9
 
 require (
 	github.com/aws/aws-sdk-go-v2/service/kms v1.50.4
-	github.com/rbaliyan/config-crypto v0.3.0
+	github.com/rbaliyan/config-crypto v0.4.0
 )
 
 require (
