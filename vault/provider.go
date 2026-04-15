@@ -165,10 +165,10 @@ func New(ctx context.Context, client Client, mount, path string, opts ...Option)
 			currentBytes = k.bytes
 			continue
 		}
-		dynOpts = append(dynOpts, crypto.WithOldKey(k.bytes, k.id, uint64(k.version)))
+		dynOpts = append(dynOpts, crypto.WithOldKey(k.bytes, k.id, uint64(k.version))) // #nosec G115 -- Vault KV versions are always positive
 	}
 
-	rp, err := crypto.NewRotatingProvider(currentBytes, currentID, uint64(current), dynOpts...)
+	rp, err := crypto.NewRotatingProvider(currentBytes, currentID, uint64(current), dynOpts...) // #nosec G115 -- Vault KV versions are always positive
 	if err != nil {
 		return nil, fmt.Errorf("vault: build rotating provider: %w", err)
 	}
@@ -306,7 +306,7 @@ func runKVPoll(ctx context.Context, client Client, rp *crypto.RotatingProvider, 
 				continue
 			}
 			id := o.keyIDFormat(v)
-			err = rp.AddKey(keyBytes, id, uint64(v))
+			err = rp.AddKey(keyBytes, id, uint64(v)) // #nosec G115 -- Vault KV versions are always positive
 			clear(keyBytes)
 			if err != nil {
 				if crypto.IsProviderClosed(err) {
