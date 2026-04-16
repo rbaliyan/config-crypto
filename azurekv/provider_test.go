@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"testing"
 
-	"github.com/Azure/azure-sdk-for-go/sdk/security/keyvault/azkeys"
 	crypto "github.com/rbaliyan/config-crypto"
 )
 
@@ -14,16 +13,16 @@ type mockClient struct {
 	failOn string
 }
 
-func (m *mockClient) UnwrapKey(_ context.Context, _ string, _ string, params azkeys.KeyOperationParameters, _ *azkeys.UnwrapKeyOptions) (azkeys.UnwrapKeyResponse, error) {
-	ct := string(params.Value)
+func (m *mockClient) UnwrapKey(_ context.Context, _, _, _ string, ciphertext []byte) ([]byte, error) {
+	ct := string(ciphertext)
 	if ct == m.failOn {
-		return azkeys.UnwrapKeyResponse{}, fmt.Errorf("keyvault: access denied")
+		return nil, fmt.Errorf("keyvault: access denied")
 	}
 	plaintext, ok := m.keys[ct]
 	if !ok {
-		return azkeys.UnwrapKeyResponse{}, fmt.Errorf("keyvault: invalid ciphertext")
+		return nil, fmt.Errorf("keyvault: invalid ciphertext")
 	}
-	return azkeys.UnwrapKeyResponse{KeyOperationResult: azkeys.KeyOperationResult{Result: plaintext}}, nil
+	return plaintext, nil
 }
 
 func makeKey(seed byte) []byte {
@@ -107,6 +106,12 @@ func TestNew_NoKeys(t *testing.T) {
 	}
 }
 
+func TestNew_NilClient(t *testing.T) {
+	if _, err := New(context.Background(), nil, WithWrappedKey([]byte("wrap-1"), "key-1", "my-key", "v1")); err == nil {
+		t.Error("expected error for nil client")
+	}
+}
+
 func TestNew_UnwrapFailure(t *testing.T) {
 	client := &mockClient{failOn: "wrap-1"}
 	if _, err := New(context.Background(), client, WithWrappedKey([]byte("wrap-1"), "key-1", "my-key", "v1")); err == nil {
@@ -130,7 +135,7 @@ func TestNew_DecryptedKeyZeroed(t *testing.T) {
 func TestNew_WithAlgorithm(t *testing.T) {
 	client := &mockClient{keys: map[string][]byte{"wrap": makeKey(1)}}
 	provider, err := New(context.Background(), client,
-		WithWrappedKeyAlgorithm([]byte("wrap"), "key-1", "my-key", "v1", azkeys.EncryptionAlgorithmRSAOAEP),
+		WithWrappedKeyAlgorithm([]byte("wrap"), "key-1", "my-key", "v1", AlgorithmRSAOAEP),
 	)
 	if err != nil {
 		t.Fatalf("New: %v", err)

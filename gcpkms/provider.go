@@ -1,13 +1,19 @@
 // Package gcpkms provides a crypto.Provider backed by Google Cloud KMS.
 //
-// Keys are fetched from Cloud KMS at construction time and cached in memory.
-// The provider uses the CryptoKeys.Decrypt RPC to unwrap encrypted key material.
+// Keys are decrypted at construction time using a Client interface. Wire up
+// the Cloud KMS Go SDK by implementing Client with a one-method wrapper:
 //
-// Usage:
+//	type myGCPClient struct{ kms *kms.KeyManagementClient }
 //
-//	client, err := kms.NewKeyManagementClient(ctx)
-//	provider, err := gcpkms.New(ctx, client, "key-1",
-//	    gcpkms.WithEncryptedKey(ciphertext, "key-1", resourceName),
+//	func (c *myGCPClient) Decrypt(ctx context.Context, resourceName string, ciphertext []byte) ([]byte, error) {
+//	    resp, err := c.kms.Decrypt(ctx, &kmspb.DecryptRequest{Name: resourceName, Ciphertext: ciphertext})
+//	    if err != nil { return nil, err }
+//	    return resp.Plaintext, nil
+//	}
+//
+//	kmsClient, err := kms.NewKeyManagementClient(ctx) // handle error
+//	provider, err := gcpkms.New(ctx, &myGCPClient{kmsClient},
+//	    gcpkms.WithEncryptedKey(ciphertext, "key-1", "projects/P/locations/L/keyRings/R/cryptoKeys/K"),
 //	)
 package gcpkms
 
@@ -15,13 +21,18 @@ import (
 	"context"
 	"fmt"
 
-	kmspb "cloud.google.com/go/kms/apiv1/kmspb"
 	crypto "github.com/rbaliyan/config-crypto"
 )
 
-// Client is the subset of the GCP Cloud KMS API used by this provider.
+// Client unwraps an AES-256 data key that was encrypted by Google Cloud KMS.
+// Implement this interface by calling the Cloud KMS Decrypt RPC with your SDK
+// of choice. See the package-level doc for a wiring example using
+// cloud.google.com/go/kms.
 type Client interface {
-	Decrypt(ctx context.Context, req *kmspb.DecryptRequest) (*kmspb.DecryptResponse, error)
+	// Decrypt decrypts a data key ciphertext using the specified Cloud KMS key.
+	// resourceName is the full CryptoKey resource name:
+	// "projects/P/locations/L/keyRings/R/cryptoKeys/K".
+	Decrypt(ctx context.Context, resourceName string, ciphertext []byte) (plaintext []byte, err error)
 }
 
 // Option configures a Provider.
@@ -61,6 +72,10 @@ func WithEncryptedKey(ciphertext []byte, id, resourceName string) Option {
 // Keys are decrypted during construction and cached. The KMS client is not
 // retained after construction.
 func New(ctx context.Context, client Client, opts ...Option) (crypto.Provider, error) {
+	if client == nil {
+		return nil, fmt.Errorf("gcpkms: Client must not be nil")
+	}
+
 	var o options
 	for _, opt := range opts {
 		opt(&o)
@@ -81,17 +96,14 @@ func New(ctx context.Context, client Client, opts ...Option) (crypto.Provider, e
 		}
 	}()
 	for _, ek := range o.encryptedKeys {
-		resp, err := client.Decrypt(ctx, &kmspb.DecryptRequest{
-			Name:       ek.resourceName,
-			Ciphertext: ek.ciphertext,
-		})
+		plaintext, err := client.Decrypt(ctx, ek.resourceName, ek.ciphertext)
 		if err != nil {
 			return nil, fmt.Errorf("gcpkms: failed to decrypt key %q: %w", ek.id, err)
 		}
-		if len(resp.Plaintext) != 32 {
-			return nil, fmt.Errorf("gcpkms: decrypted key %q is %d bytes, want 32", ek.id, len(resp.Plaintext))
+		if len(plaintext) != 32 {
+			return nil, fmt.Errorf("gcpkms: decrypted key %q is %d bytes, want 32", ek.id, len(plaintext))
 		}
-		keys = append(keys, decryptedKey{bytes: resp.Plaintext, id: ek.id})
+		keys = append(keys, decryptedKey{bytes: plaintext, id: ek.id})
 	}
 
 	var providerOpts []crypto.Option

@@ -26,25 +26,13 @@ jobs:
         run: go install golang.org/x/vuln/cmd/govulncheck@v1.1.4
 
       - name: Run govulncheck
-        run: |
-          govulncheck ./...
-          for mod in awskms gcpkms azurekv vault; do
-            cd $mod
-            go mod edit -replace github.com/rbaliyan/config-crypto=../
-            go mod tidy
-            govulncheck ./...
-            cd ..
-          done
+        run: govulncheck ./...
 
   gosec:
-    name: GoSec (${{ matrix.module }})
+    name: GoSec
     runs-on: ubuntu-latest
     permissions:
       security-events: write
-    strategy:
-      fail-fast: false
-      matrix:
-        module: [root, awskms, gcpkms, azurekv, vault, gpg]
     steps:
       - name: Checkout code
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -58,18 +46,10 @@ jobs:
         run: go install github.com/securego/gosec/v2/cmd/gosec@v2.25.0
 
       - name: Run GoSec
-        run: |
-          if [ "${{ matrix.module }}" = "root" ]; then
-            gosec -fmt sarif -out gosec-results.sarif -severity medium -confidence medium -exclude-dir=awskms -exclude-dir=gcpkms -exclude-dir=azurekv -exclude-dir=vault -exclude-dir=gpg ./...
-          else
-            cd ${{ matrix.module }}
-            go mod edit -replace github.com/rbaliyan/config-crypto=../
-            go mod tidy
-            gosec -fmt sarif -out ../gosec-results.sarif -severity medium -confidence medium ./...
-          fi
+        run: gosec -fmt sarif -out gosec-results.sarif -severity medium -confidence medium ./...
 
       - name: Upload SARIF to GitHub Security
-        if: always() && matrix.module == 'root'
+        if: always()
         uses: github/codeql-action/upload-sarif@c10b8064de6f491fea524254123dbe5e09572f13 # v3
         with:
           sarif_file: gosec-results.sarif

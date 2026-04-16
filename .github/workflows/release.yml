@@ -20,22 +20,6 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Set up Go
-        uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # v6
-        with:
-          go-version-file: go.mod
-
-      - name: Run tests
-        run: |
-          go test -race ./...
-          for mod in awskms gcpkms azurekv vault; do
-            cd $mod
-            go mod edit -replace github.com/rbaliyan/config-crypto=../
-            go mod tidy
-            go test -race ./...
-            cd ..
-          done
-
       - name: Generate release notes
         id: notes
         run: |
@@ -53,15 +37,13 @@ jobs:
             git log "$RANGE" --pretty=format:"- %s" --no-merges
             echo ""
             echo ""
-            echo "## Modules"
+            echo "## Install"
             echo ""
-            echo "| Module | Install |"
-            echo "|--------|---------|"
-            echo "| Core | \`go get github.com/rbaliyan/config-crypto@${TAG}\` |"
-            echo "| AWS KMS | \`go get github.com/rbaliyan/config-crypto/awskms@${TAG}\` |"
-            echo "| GCP Cloud KMS | \`go get github.com/rbaliyan/config-crypto/gcpkms@${TAG}\` |"
-            echo "| Azure Key Vault | \`go get github.com/rbaliyan/config-crypto/azurekv@${TAG}\` |"
-            echo "| Vault Transit | \`go get github.com/rbaliyan/config-crypto/vault@${TAG}\` |"
+            echo "\`\`\`"
+            echo "go get github.com/rbaliyan/config-crypto@${TAG}"
+            echo "\`\`\`"
+            echo ""
+            echo "KMS providers (awskms, gcpkms, azurekv, vault, gpg) are packages in this module — no separate installs required."
             echo "EOF"
           } >> "$GITHUB_OUTPUT"
 

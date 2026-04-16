@@ -38,7 +38,7 @@ type Provider interface {
 Raw key bytes never leave a Provider — callers see only Encrypt/Decrypt. Two constructors:
 
 - `crypto.NewProvider(keyBytes, id, opts...)` — static, returns an unexported envelope Provider backed by a raw 32-byte AES-256 key. The common case.
-- `crypto.NewRotatingProvider(initialBytes, id, opts...)` — exported mutable Provider used by KMS sub-modules to drive runtime key rotation via `AddKey`/`SetCurrentKey`/`RemoveKey`. End users rarely construct directly.
+- `crypto.NewRotatingProvider(initialBytes, id, opts...)` — exported mutable Provider used by the vault package to drive runtime key rotation via `AddKey`/`SetCurrentKey`/`RemoveKey`. End users rarely construct directly.
 
 `NamespaceSelector` routes `Encrypt`/`Decrypt` to namespace-specific providers; `ForNamespace(ns) Provider` yields a scoped view. `RemoveAndClose` removes a namespace's provider and closes it in one step.
 
@@ -86,25 +86,25 @@ A golden byte-vector test (`TestDecryptV1GoldenVector` + `TestGoldenV1Drift` in 
 | `errors.go` | Sentinel errors with `Is*()` helpers: `ErrKeyNotFound`, `ErrInvalidKeySize`, `ErrInvalidFormat`, `ErrUnsupportedFormat`, `ErrDecryptionFailed`, `ErrInvalidKeyID`, `ErrProviderClosed`, `ErrRemoveCurrentKey`, `ErrNoProviderForNamespace` |
 | `benchmark_test.go` | Benchmarks for encode/decode at 1KB, 64KB, 1MB, and string payloads |
 
-### KMS Provider Sub-Modules
+### KMS Provider Packages
 
-Each KMS provider is a separate Go module to avoid pulling unnecessary SDK dependencies. All return a `crypto.Provider`.
+All KMS providers are regular packages in this module (`github.com/rbaliyan/config-crypto`). No separate sub-module installs are needed; importing the package is sufficient. No SDK dependencies are introduced — each provider defines a narrow `Client` interface using only stdlib types, which the caller wires up to their SDK of choice.
 
-| Module | Import Path | SDK |
-|--------|-------------|-----|
-| `awskms/` | `github.com/rbaliyan/config-crypto/awskms` | `aws-sdk-go-v2/service/kms` |
-| `gcpkms/` | `github.com/rbaliyan/config-crypto/gcpkms` | `cloud.google.com/go/kms` |
-| `azurekv/` | `github.com/rbaliyan/config-crypto/azurekv` | `azure-sdk-for-go/azkeys` |
-| `vault/` | `github.com/rbaliyan/config-crypto/vault` | None (interface-based, bring your own HTTP client) |
-| `gpg/` | `github.com/rbaliyan/config-crypto/gpg` | None (process- or library-based) |
+| Package | Import Path | `Client` interface |
+|---------|-------------|-------------------|
+| `awskms/` | `github.com/rbaliyan/config-crypto/awskms` | `Decrypt(ctx, keyID string, ciphertext []byte) ([]byte, error)` |
+| `gcpkms/` | `github.com/rbaliyan/config-crypto/gcpkms` | `Decrypt(ctx, resourceName string, ciphertext []byte) ([]byte, error)` |
+| `azurekv/` | `github.com/rbaliyan/config-crypto/azurekv` | `UnwrapKey(ctx, keyName, keyVersion, algorithm string, ciphertext []byte) ([]byte, error)` |
+| `vault/` | `github.com/rbaliyan/config-crypto/vault` | `KVMetadata` + `KVGet` (stdlib types only) |
+| `gpg/` | `github.com/rbaliyan/config-crypto/gpg` | `Decrypt(ctx, ciphertext []byte) ([]byte, error)` |
 
-Common pattern (awskms, gcpkms, azurekv, gpg):
-- Accept a `Client` interface (subset of the real SDK) for testability
+Common pattern (all providers):
+- Accept a `Client` interface for testability; the SDK wiring is a one-method wrapper the caller writes
 - Decrypt/unwrap keys at construction, copy into a `crypto.Provider`, discard the client
 - Decrypted key bytes are zeroed after being copied into the provider
-- `HealthCheck` inherits liveness-only semantics from the underlying static provider
+- `HealthCheck` inherits liveness-only semantics from the underlying static provider (except `vault`, which also checks Vault reachability)
 
-Vault module (**KV v2 only**):
+Vault package (**KV v2 only**):
 - Reads versioned secrets from a KV v2 path, maps each version to a key ID (via `WithKeyIDFormat`, default `strconv.Itoa`)
 - Optional background polling via `WithKeyVersionRefreshInterval` picks up new versions + promotes current automatically; exits on `Close`
 - `HealthCheck` calls `KVMetadata` to verify Vault reachability (readiness check)
@@ -126,9 +126,7 @@ Core module:
 - `github.com/rbaliyan/config` — for `codec.Codec` + `codec.Transformer` interfaces only (both take `ctx context.Context`)
 - Go stdlib: `crypto/aes`, `crypto/cipher`, `crypto/rand` — no third-party crypto
 
-KMS sub-modules have their own go.mod and only pull their respective SDK.
-Sub-modules reference the published core module (no replace directives at release time).
-For local development against unreleased core changes, temporarily add `replace github.com/rbaliyan/config-crypto => ../` to the sub-module's go.mod.
+KMS provider packages are in the core module and add no external dependencies. The SDK wiring is a small wrapper the caller writes in their own package — see each provider's package-level doc comment for a concrete example.
 
 ## Testing
 
@@ -137,7 +135,7 @@ just test              # Core module tests
 just test-race         # Race condition detection
 just test-v            # Verbose output
 just test-coverage     # Coverage report
-just test-all          # All modules (core + KMS providers)
+just test-all          # All packages (equivalent to just test-race)
 ```
 
 Key test scenarios:

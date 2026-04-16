@@ -27,16 +27,7 @@ jobs:
           go-version-file: go.mod
 
       - name: Run go mod tidy
-        run: |
-          go mod tidy
-
-          # Also tidy sub-modules if they exist
-          for dir in */; do
-            if [ -f "$dir/go.mod" ]; then
-              echo "Tidying $dir"
-              (cd "$dir" && go mod tidy)
-            fi
-          done
+        run: go mod tidy
 
       - name: Check for changes
         id: changes

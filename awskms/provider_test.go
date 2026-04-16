@@ -5,18 +5,21 @@ import (
 	"fmt"
 	"testing"
 
-	"github.com/aws/aws-sdk-go-v2/service/kms"
 	crypto "github.com/rbaliyan/config-crypto"
 )
 
 // mockClient implements Client for testing.
 type mockClient struct {
-	keys   map[string][]byte // ciphertext -> plaintext
-	failOn string            // ciphertext to fail on
+	keys      map[string][]byte // ciphertext -> plaintext
+	failOn    string            // ciphertext to fail on
+	wantKeyID string            // if non-empty, assert keyID matches
 }
 
-func (m *mockClient) Decrypt(_ context.Context, params *kms.DecryptInput, _ ...func(*kms.Options)) (*kms.DecryptOutput, error) {
-	ct := string(params.CiphertextBlob)
+func (m *mockClient) Decrypt(_ context.Context, keyID string, ciphertext []byte) ([]byte, error) {
+	if m.wantKeyID != "" && keyID != m.wantKeyID {
+		return nil, fmt.Errorf("kms: got keyID %q, want %q", keyID, m.wantKeyID)
+	}
+	ct := string(ciphertext)
 	if ct == m.failOn {
 		return nil, fmt.Errorf("kms: access denied")
 	}
@@ -24,7 +27,7 @@ func (m *mockClient) Decrypt(_ context.Context, params *kms.DecryptInput, _ ...f
 	if !ok {
 		return nil, fmt.Errorf("kms: invalid ciphertext")
 	}
-	return &kms.DecryptOutput{Plaintext: plaintext}, nil
+	return plaintext, nil
 }
 
 func makeKey(seed byte) []byte {
@@ -128,9 +131,13 @@ func TestNew_DecryptFailure(t *testing.T) {
 
 func TestNew_WithKMSKeyID(t *testing.T) {
 	ctx := context.Background()
-	client := &mockClient{keys: map[string][]byte{"enc-1": makeKey(1)}}
+	const arn = "arn:aws:kms:us-east-1:123:key/abc"
+	client := &mockClient{
+		keys:      map[string][]byte{"enc-1": makeKey(1)},
+		wantKeyID: arn,
+	}
 	provider, err := New(ctx, client,
-		WithEncryptedKeyForKMSKey([]byte("enc-1"), "key-1", "arn:aws:kms:us-east-1:123:key/abc"),
+		WithEncryptedKeyForKMSKey([]byte("enc-1"), "key-1", arn),
 	)
 	if err != nil {
 		t.Fatalf("New: %v", err)
@@ -138,6 +145,12 @@ func TestNew_WithKMSKeyID(t *testing.T) {
 	defer provider.Close()
 	if _, err := provider.Encrypt(ctx, []byte("x")); err != nil {
 		t.Errorf("Encrypt: %v", err)
+	}
+}
+
+func TestNew_NilClient(t *testing.T) {
+	if _, err := New(context.Background(), nil, WithEncryptedKey([]byte("enc-1"), "key-1")); err == nil {
+		t.Error("expected error for nil client")
 	}
 }
 
