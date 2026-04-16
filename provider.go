@@ -16,8 +16,8 @@ type Provider interface {
 	// Connect initialises any remote connection the provider needs.
 	// It is the caller's responsibility to call Connect before the first
 	// Encrypt or Decrypt. Implementations backed by in-memory keys treat
-	// this as a no-op; remote providers (e.g. a future Transit-backed
-	// implementation) use it to establish SDK sessions or verify credentials.
+	// this as a no-op; remote-key-wrapping implementations use it to
+	// establish SDK sessions or verify credentials.
 	Connect(ctx context.Context) error
 
 	// Encrypt encrypts plaintext using envelope encryption.
