@@ -9,6 +9,17 @@ import (
 // Provider encrypts and decrypts data using envelope encryption.
 // Implementations must be safe for concurrent use.
 type Provider interface {
+	// Name returns a short human-readable identifier for this provider.
+	// Used for logging and observability; need not be globally unique.
+	Name() string
+
+	// Connect initialises any remote connection the provider needs.
+	// It is the caller's responsibility to call Connect before the first
+	// Encrypt or Decrypt. Implementations backed by in-memory keys treat
+	// this as a no-op; remote providers (e.g. a future Transit-backed
+	// implementation) use it to establish SDK sessions or verify credentials.
+	Connect(ctx context.Context) error
+
 	// Encrypt encrypts plaintext using envelope encryption.
 	Encrypt(ctx context.Context, plaintext []byte) ([]byte, error)
 
@@ -26,50 +37,9 @@ type Provider interface {
 	Close() error
 }
 
-// Option configures provider construction.
-type Option func(*providerOptions)
-
-type providerOptions struct {
-	oldKeys []oldKeyEntry
-	err     error
-}
-
-type oldKeyEntry struct {
-	bytes []byte
-	id    string
-	rank  uint64
-}
-
-// WithOldKey adds a previous key for decryption during key rotation.
-// The keyBytes must be 32 bytes for AES-256 and id must not be empty.
-// rank is the KV store version number for this key (e.g. the Vault KV version
-// integer cast to uint64). NeedsReencryption on RotatingProvider uses rank to
-// determine whether the current key is newer than the key embedded in a
-// ciphertext, preventing instances with older keys from re-encrypting
-// backwards during a rolling restart. Pass 0 when the backing store does not
-// provide version ordering.
-func WithOldKey(keyBytes []byte, id string, rank uint64) Option {
-	return func(o *providerOptions) {
-		if o.err != nil {
-			return
-		}
-		if len(keyBytes) != aesKeySize {
-			o.err = fmt.Errorf("%w: old key %q has %d bytes", ErrInvalidKeySize, id, len(keyBytes))
-			return
-		}
-		if id == "" {
-			o.err = fmt.Errorf("%w: old key ID must not be empty", ErrInvalidKeyID)
-			return
-		}
-		b := make([]byte, aesKeySize)
-		copy(b, keyBytes)
-		o.oldKeys = append(o.oldKeys, oldKeyEntry{bytes: b, id: id, rank: rank})
-	}
-}
-
 // NewProvider builds a static Provider from raw 32-byte AES-256 key bytes.
 // Key bytes are copied internally; the caller may safely zero the original after construction.
-func NewProvider(keyBytes []byte, id string, opts ...Option) (Provider, error) {
+func NewProvider(keyBytes []byte, id string) (Provider, error) {
 	if len(keyBytes) != aesKeySize {
 		return nil, fmt.Errorf("%w: got %d bytes", ErrInvalidKeySize, len(keyBytes))
 	}
@@ -77,27 +47,16 @@ func NewProvider(keyBytes []byte, id string, opts ...Option) (Provider, error) {
 		return nil, fmt.Errorf("%w: key ID must not be empty", ErrInvalidKeyID)
 	}
 
-	o := &providerOptions{}
-	for _, opt := range opts {
-		opt(o)
-	}
-	if o.err != nil {
-		return nil, o.err
-	}
-
 	b := make([]byte, aesKeySize)
 	copy(b, keyBytes)
 	current := keyEntry{id: id, bytes: b}
 
-	keys := make(map[string]keyEntry, 1+len(o.oldKeys))
-	keys[id] = current
-
-	for _, old := range o.oldKeys {
-		if _, exists := keys[old.id]; exists {
-			return nil, fmt.Errorf("%w: duplicate key ID %q", ErrInvalidKeyID, old.id)
-		}
-		keys[old.id] = keyEntry{id: old.id, bytes: old.bytes, generation: old.rank}
-	}
+	// Make a separate copy for the lookup map so that Close() zeroing the map
+	// entry and zeroing current.bytes do not alias the same backing array.
+	kb := make([]byte, aesKeySize)
+	copy(kb, b)
+	keys := make(map[string]keyEntry, 1)
+	keys[id] = keyEntry{id: id, bytes: kb}
 
 	return &staticProvider{
 		current: current,
@@ -112,7 +71,7 @@ type keyEntry struct {
 	generation uint64 // monotonically increasing; higher means newer
 }
 
-// staticProvider is an immutable Provider backed by in-memory keys.
+// staticProvider is an immutable Provider backed by a single in-memory key.
 type staticProvider struct {
 	mu      sync.RWMutex
 	current keyEntry
@@ -122,6 +81,16 @@ type staticProvider struct {
 
 // Compile-time interface check.
 var _ Provider = (*staticProvider)(nil)
+
+// Name returns the key ID of this provider.
+func (p *staticProvider) Name() string {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	return p.current.id
+}
+
+// Connect is a no-op for static providers.
+func (p *staticProvider) Connect(_ context.Context) error { return nil }
 
 // Encrypt encrypts plaintext using envelope encryption with the current key.
 func (p *staticProvider) Encrypt(_ context.Context, plaintext []byte) ([]byte, error) {
@@ -147,8 +116,8 @@ func (p *staticProvider) Decrypt(_ context.Context, ciphertext []byte) ([]byte, 
 // material in process memory and does not retain a handle on any remote
 // service, so "healthy" means "not yet closed" — it cannot probe whether
 // the backend that originally supplied the keys is still reachable. KMS
-// sub-modules that need remote readiness checks must override HealthCheck
-// on their own wrapper type (see vault/provider.go for an example).
+// packages that need remote readiness checks must wrap the Provider and
+// override HealthCheck on their own type.
 func (p *staticProvider) HealthCheck(_ context.Context) error {
 	p.mu.RLock()
 	defer p.mu.RUnlock()

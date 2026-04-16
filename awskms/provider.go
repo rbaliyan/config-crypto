@@ -75,7 +75,7 @@ func WithEncryptedKeyForKMSKey(ciphertext []byte, id, kmsKeyID string) Option {
 	}
 }
 
-// New creates a crypto.Provider that unwraps encrypted keys using AWS KMS.
+// New creates a crypto.KeyRingProvider that unwraps encrypted keys using AWS KMS.
 //
 // At least one key must be provided via WithEncryptedKey or
 // WithEncryptedKeyForKMSKey. The first key added becomes the current key for
@@ -83,7 +83,7 @@ func WithEncryptedKeyForKMSKey(ciphertext []byte, id, kmsKeyID string) Option {
 //
 // Keys are decrypted during construction and cached. The KMS client is not
 // retained after construction.
-func New(ctx context.Context, client Client, opts ...Option) (crypto.Provider, error) {
+func New(ctx context.Context, client Client, opts ...Option) (crypto.KeyRingProvider, error) {
 	if client == nil {
 		return nil, fmt.Errorf("awskms: Client must not be nil")
 	}
@@ -118,14 +118,14 @@ func New(ctx context.Context, client Client, opts ...Option) (crypto.Provider, e
 		keys = append(keys, decryptedKey{bytes: plaintext, id: ek.id})
 	}
 
-	var providerOpts []crypto.Option
-	for _, k := range keys[1:] {
-		providerOpts = append(providerOpts, crypto.WithOldKey(k.bytes, k.id, 0))
-	}
-
-	provider, err := crypto.NewProvider(keys[0].bytes, keys[0].id, providerOpts...)
+	ring, err := crypto.NewKeyRingProvider(keys[0].bytes, keys[0].id, 0)
 	if err != nil {
 		return nil, fmt.Errorf("awskms: %w", err)
 	}
-	return provider, nil
+	for _, k := range keys[1:] {
+		if err := ring.AddKey(k.bytes, k.id, 0); err != nil {
+			return nil, fmt.Errorf("awskms: %w", err)
+		}
+	}
+	return ring, nil
 }

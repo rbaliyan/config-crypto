@@ -1,16 +1,20 @@
-// Package vault provides a crypto.Provider backed by a HashiCorp Vault KV v2
-// secret. Each version of the secret becomes one key; the version number
+// Package vault provides a crypto.KeyRingProvider backed by a HashiCorp Vault
+// KV v2 secret. Each version of the secret becomes one key; the version number
 // (formatted via WithKeyIDFormat) is used as the key ID stored in encrypted
-// headers. New secret versions are picked up by an optional background
-// poll (WithKeyVersionRefreshInterval).
+// headers.
 //
 // Usage:
 //
 //	client := myvault.NewClient(...)
-//	provider, err := vault.New(ctx, client, "secret", "config-crypto/keys",
-//	    vault.WithKeyVersionRefreshInterval(30*time.Second),
+//	ring, err := vault.New(ctx, client, "secret", "config-crypto/keys")
+//	defer ring.Close()
+//
+//	// Optional: start background polling so new versions are picked up automatically.
+//	stop, err := vault.Poll(ctx, client, ring, "secret", "config-crypto/keys",
+//	    30*time.Second,
+//	    vault.WithRefreshErrorHandler(func(err error) { log.Println(err) }),
 //	)
-//	defer provider.Close()
+//	defer stop()
 package vault
 
 import (
@@ -44,14 +48,13 @@ type Client interface {
 	KVGet(ctx context.Context, mount, path string, version int) (map[string]string, error)
 }
 
-// Option configures New.
+// Option configures New and Poll.
 type Option func(*options)
 
 type options struct {
-	field           string
-	keyIDFormat     func(version int) string
-	refreshInterval time.Duration
-	onRefreshError  func(error)
+	field          string
+	keyIDFormat    func(version int) string
+	onRefreshError func(error)
 }
 
 // WithField sets the field name within the KV secret data that holds the
@@ -68,33 +71,25 @@ func WithKeyIDFormat(fn func(version int) string) Option {
 	return func(o *options) { o.keyIDFormat = fn }
 }
 
-// WithKeyVersionRefreshInterval enables background polling of KV metadata.
-// When a new version appears, it is fetched, registered, and promoted to
-// current. A non-positive interval disables polling (the default).
-func WithKeyVersionRefreshInterval(d time.Duration) Option {
-	return func(o *options) { o.refreshInterval = d }
-}
-
 // WithRefreshErrorHandler sets a callback invoked when a background poll
 // fails. The callback runs on the polling goroutine; it must be safe for
 // concurrent use and must not block. If unset, errors are logged via slog.
+// This option is only meaningful when passed to Poll.
 func WithRefreshErrorHandler(fn func(error)) Option {
 	return func(o *options) { o.onRefreshError = fn }
 }
 
-// New creates a crypto.Provider backed by a Vault KV v2 secret.
+// New creates a crypto.KeyRingProvider backed by a Vault KV v2 secret.
 //
 // At construction, KVMetadata is called once to enumerate every version,
 // each version is fetched, and the configured field is base64-decoded into
 // the 32-byte AES-256 key. The version Vault reports as current becomes the
-// provider's current key; remaining versions are added as old keys for
+// provider's current key; remaining versions are registered as old keys for
 // decryption.
 //
-// If WithKeyVersionRefreshInterval is set to a positive duration, a
-// background goroutine polls KVMetadata at that interval. New versions are
-// registered and promoted automatically. The goroutine exits when ctx is
-// canceled or Close is called on the returned Provider.
-func New(ctx context.Context, client Client, mount, path string, opts ...Option) (crypto.Provider, error) {
+// To automatically pick up new secret versions at runtime, call Poll after
+// construction.
+func New(ctx context.Context, client Client, mount, path string, opts ...Option) (crypto.KeyRingProvider, error) {
 	if client == nil {
 		return nil, errors.New("vault: Client must not be nil")
 	}
@@ -153,81 +148,99 @@ func New(ctx context.Context, client Client, mount, path string, opts ...Option)
 		keys = append(keys, fetched{bytes: b, id: o.keyIDFormat(v), version: v})
 	}
 
-	// Build a RotatingProvider with current key and old-key options.
-	// KV version numbers are used as ranks so that NeedsReencryption ordering
-	// is stable across process restarts (Vault versions are monotonically
-	// increasing and persistent, unlike an in-process counter).
+	// Build a KeyRingProvider with current key and old keys for decryption.
+	// KV version numbers are used as ranks so NeedsReencryption ordering is
+	// stable across restarts.
 	currentID := o.keyIDFormat(current)
 	var currentBytes []byte
-	dynOpts := make([]crypto.Option, 0, len(keys)-1)
 	for _, k := range keys {
 		if k.version == current {
 			currentBytes = k.bytes
+			break
+		}
+	}
+
+	ring, err := crypto.NewKeyRingProvider(currentBytes, currentID, uint64(current)) // #nosec G115 -- Vault KV versions are always positive
+	if err != nil {
+		return nil, fmt.Errorf("vault: build key ring: %w", err)
+	}
+	for _, k := range keys {
+		if k.version == current {
 			continue
 		}
-		dynOpts = append(dynOpts, crypto.WithOldKey(k.bytes, k.id, uint64(k.version))) // #nosec G115 -- Vault KV versions are always positive
-	}
-
-	rp, err := crypto.NewRotatingProvider(currentBytes, currentID, uint64(current), dynOpts...) // #nosec G115 -- Vault KV versions are always positive
-	if err != nil {
-		return nil, fmt.Errorf("vault: build rotating provider: %w", err)
-	}
-
-	p := &provider{rp: rp, client: client, mount: mount, path: path}
-	if o.refreshInterval > 0 {
-		known := make(map[int]struct{}, len(sortedVersions))
-		for _, v := range sortedVersions {
-			known[v] = struct{}{}
+		if err := ring.AddKey(k.bytes, k.id, uint64(k.version)); err != nil { // #nosec G115 -- Vault KV versions are always positive
+			return nil, fmt.Errorf("vault: add key version %d: %w", k.version, err)
 		}
-		pollCtx, cancel := context.WithCancel(ctx)
-		p.cancelPoll = cancel
-		p.wg.Go(func() {
-			runKVPoll(pollCtx, client, rp, mount, path, known, current, o)
-		})
 	}
-	return p, nil
+	return ring, nil
 }
 
-// provider wraps a *crypto.RotatingProvider with the optional polling
-// goroutine lifecycle. Encrypt and Decrypt forward to the inner provider;
-// Close stops polling and closes the inner. HealthCheck verifies both the
-// inner state and connectivity to Vault.
-type provider struct {
-	rp         *crypto.RotatingProvider
-	client     Client
-	mount      string
-	path       string
-	cancelPoll context.CancelFunc
-	wg         sync.WaitGroup
-}
-
-func (p *provider) Encrypt(ctx context.Context, plaintext []byte) ([]byte, error) {
-	return p.rp.Encrypt(ctx, plaintext)
-}
-
-func (p *provider) Decrypt(ctx context.Context, ciphertext []byte) ([]byte, error) {
-	return p.rp.Decrypt(ctx, ciphertext)
-}
-
-// HealthCheck verifies the inner provider is open and that Vault is reachable
-// by issuing a KVMetadata call against the configured secret. The ctx
-// deadline bounds the Vault round-trip.
-func (p *provider) HealthCheck(ctx context.Context) error {
-	if err := p.rp.HealthCheck(ctx); err != nil {
-		return err
+// Poll starts a background goroutine that polls Vault KV metadata at the
+// given interval and adds any newly-seen versions to ring. It performs an
+// initial metadata read to seed the set of already-known versions; this read
+// failing returns an error immediately.
+//
+// The returned stop function cancels the goroutine and blocks until it exits.
+// Callers should defer stop() after a successful Poll call.
+//
+// The WithField and WithKeyIDFormat options passed to Poll must match those
+// passed to New; mismatched options will cause the poller to look for the
+// wrong field name or derive different key IDs, silently corrupting the ring.
+// WithRefreshErrorHandler is the only Poll-specific option.
+//
+// Per-version fetch failures are retried up to maxVersionRetries times;
+// after that the version is permanently skipped for the lifetime of the
+// goroutine (until the process restarts). Errors are reported via
+// WithRefreshErrorHandler or logged via slog.
+func Poll(ctx context.Context, client Client, ring crypto.KeyRingProvider, mount, path string, interval time.Duration, opts ...Option) (func(), error) {
+	if client == nil {
+		return nil, errors.New("vault: Poll: Client must not be nil")
 	}
-	if _, _, err := p.client.KVMetadata(ctx, p.mount, p.path); err != nil {
-		return fmt.Errorf("vault: HealthCheck KVMetadata: %w", err)
+	if ring == nil {
+		return nil, errors.New("vault: Poll: ring must not be nil")
 	}
-	return nil
-}
+	if mount == "" {
+		return nil, errors.New("vault: Poll: mount must not be empty")
+	}
+	if path == "" {
+		return nil, errors.New("vault: Poll: path must not be empty")
+	}
+	if interval <= 0 {
+		return nil, errors.New("vault: Poll: interval must be positive")
+	}
 
-func (p *provider) Close() error {
-	if p.cancelPoll != nil {
-		p.cancelPoll()
+	o := options{
+		field:       "key",
+		keyIDFormat: strconv.Itoa,
 	}
-	p.wg.Wait()
-	return p.rp.Close()
+	for _, opt := range opts {
+		opt(&o)
+	}
+
+	// Seed known versions so the poller doesn't re-fetch what's already loaded.
+	versions, current, err := client.KVMetadata(ctx, mount, path)
+	if err != nil {
+		return nil, fmt.Errorf("vault: Poll initial metadata: %w", err)
+	}
+
+	known := make(map[int]struct{}, len(versions))
+	for _, v := range versions {
+		known[v] = struct{}{}
+	}
+
+	pollCtx, cancel := context.WithCancel(ctx)
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		runKVPoll(pollCtx, client, ring, mount, path, known, current, interval, o)
+	}()
+
+	stop := func() {
+		cancel()
+		wg.Wait()
+	}
+	return stop, nil
 }
 
 // fetchKeyVersion reads one secret version and decodes its base64 key field.
@@ -252,20 +265,18 @@ func fetchKeyVersion(ctx context.Context, client Client, mount, path string, ver
 }
 
 // maxVersionRetries bounds how many times the poller will retry a single KV
-// version before giving up on it. Permanent failures (malformed key material,
-// wrong size, etc.) hit this limit and are skipped on subsequent ticks.
+// version before giving up on it.
 const maxVersionRetries = 5
 
-// runKVPoll polls KV metadata at o.refreshInterval and adds any newly-seen
-// versions to the provider. Per-version failures are retried up to
-// maxVersionRetries times; after that the version is marked failed and
-// permanently skipped. Exits when ctx is canceled or the provider is closed.
-func runKVPoll(ctx context.Context, client Client, rp *crypto.RotatingProvider, mount, path string, known map[int]struct{}, lastCurrent int, o options) {
-	ticker := time.NewTicker(o.refreshInterval)
+// runKVPoll polls KV metadata at interval and adds any newly-seen versions to
+// ring. Per-version failures are retried up to maxVersionRetries times; after
+// that the version is permanently skipped. Exits when ctx is canceled.
+func runKVPoll(ctx context.Context, client Client, ring crypto.KeyRingProvider, mount, path string, known map[int]struct{}, lastCurrent int, interval time.Duration, o options) {
+	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 
-	failed := make(map[int]struct{}) // versions we've permanently given up on
-	retries := make(map[int]int)     // in-flight retry counter per version
+	failed := make(map[int]struct{})
+	retries := make(map[int]int)
 
 	for {
 		select {
@@ -280,7 +291,7 @@ func runKVPoll(ctx context.Context, client Client, rp *crypto.RotatingProvider, 
 			continue
 		}
 
-		newVersions := make([]int, 0)
+		var newVersions []int
 		for _, v := range versions {
 			if _, ok := known[v]; ok {
 				continue
@@ -306,7 +317,7 @@ func runKVPoll(ctx context.Context, client Client, rp *crypto.RotatingProvider, 
 				continue
 			}
 			id := o.keyIDFormat(v)
-			err = rp.AddKey(keyBytes, id, uint64(v)) // #nosec G115 -- Vault KV versions are always positive
+			err = ring.AddKey(keyBytes, id, uint64(v)) // #nosec G115 -- Vault KV versions are always positive
 			clear(keyBytes)
 			if err != nil {
 				if crypto.IsProviderClosed(err) {
@@ -326,16 +337,14 @@ func runKVPoll(ctx context.Context, client Client, rp *crypto.RotatingProvider, 
 			delete(retries, v)
 		}
 
-		// Skip promotion if Vault's current version is one we've given up on —
-		// it'll never be in the rotating provider, and retrying SetCurrentKey
-		// every tick would spam errors forever.
+		// Skip promotion if Vault's current version is one we've given up on.
 		if _, isFailed := failed[current]; isFailed {
 			continue
 		}
 
 		if current != lastCurrent {
 			id := o.keyIDFormat(current)
-			if err := rp.SetCurrentKey(id); err != nil {
+			if err := ring.SetCurrentKey(id); err != nil {
 				if crypto.IsProviderClosed(err) {
 					return
 				}

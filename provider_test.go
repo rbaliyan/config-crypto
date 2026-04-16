@@ -45,14 +45,17 @@ func TestNewProvider_OldKeyDecryptsLegacy(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// New provider has both keys; current is "v2".
-	p, err := NewProvider(newer, "v2", WithOldKey(old, "v1", 0))
+	// KeyRingProvider has both keys; current is "v2".
+	rp, err := NewKeyRingProvider(newer, "v2", 2)
 	if err != nil {
-		t.Fatalf("NewProvider with old key: %v", err)
+		t.Fatalf("NewKeyRingProvider: %v", err)
 	}
-	t.Cleanup(func() { _ = p.Close() })
+	t.Cleanup(func() { _ = rp.Close() })
+	if err := rp.AddKey(old, "v1", 1); err != nil {
+		t.Fatalf("AddKey: %v", err)
+	}
 
-	got, err := p.Decrypt(context.Background(), ct)
+	got, err := rp.Decrypt(context.Background(), ct)
 	if err != nil {
 		t.Fatalf("Decrypt: %v", err)
 	}
@@ -66,18 +69,14 @@ func TestNewProvider_Validation(t *testing.T) {
 		name string
 		key  []byte
 		id   string
-		opts []Option
 	}{
-		{"short key", makeKey(16), "id", nil},
-		{"long key", makeKey(64), "id", nil},
-		{"empty id", makeKey(32), "", nil},
-		{"old key bad size", makeKey(32), "id", []Option{WithOldKey(makeKey(16), "old", 0)}},
-		{"old key empty id", makeKey(32), "id", []Option{WithOldKey(makeKey(32), "", 0)}},
-		{"duplicate id", makeKey(32), "k", []Option{WithOldKey(makeKey(32), "k", 0)}},
+		{"short key", makeKey(16), "id"},
+		{"long key", makeKey(64), "id"},
+		{"empty id", makeKey(32), ""},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			_, err := NewProvider(c.key, c.id, c.opts...)
+			_, err := NewProvider(c.key, c.id)
 			if err == nil {
 				t.Fatal("expected error")
 			}
@@ -144,8 +143,8 @@ func TestNewProvider_KeyBytesIsolated(t *testing.T) {
 	}
 }
 
-func TestRotatingProvider_AddSetRemoveCurrent(t *testing.T) {
-	rp := mustNewRotatingProvider(t, makeKey(32), "v1", 1)
+func TestKeyRingProvider_AddSetRemoveCurrent(t *testing.T) {
+	rp := mustNewKeyRingProvider(t, makeKey(32), "v1", 1)
 	ctx := context.Background()
 
 	// Encrypt with v1.
@@ -200,25 +199,68 @@ func TestRotatingProvider_AddSetRemoveCurrent(t *testing.T) {
 	}
 }
 
-func TestRotatingProvider_SetCurrentKeyUnknown(t *testing.T) {
-	rp := mustNewRotatingProvider(t, makeKey(32), "v1", 0)
+func TestKeyRingProvider_SetCurrentKeyUnknown(t *testing.T) {
+	rp := mustNewKeyRingProvider(t, makeKey(32), "v1", 0)
 	if err := rp.SetCurrentKey("nonexistent"); !errors.Is(err, ErrKeyNotFound) {
 		t.Errorf("got %v, want ErrKeyNotFound", err)
 	}
 }
 
-func TestRotatingProvider_AddKeyValidation(t *testing.T) {
-	rp := mustNewRotatingProvider(t, makeKey(32), "v1", 0)
+func TestKeyRingProvider_AddKeyValidation(t *testing.T) {
+	rp := mustNewKeyRingProvider(t, makeKey(32), "v1", 0)
 	if err := rp.AddKey(makeKey(16), "bad", 0); !errors.Is(err, ErrInvalidKeySize) {
 		t.Errorf("AddKey bad size: got %v, want ErrInvalidKeySize", err)
 	}
 	if err := rp.AddKey(makeKey(32), "", 0); !errors.Is(err, ErrInvalidKeyID) {
 		t.Errorf("AddKey empty id: got %v, want ErrInvalidKeyID", err)
 	}
+	// Duplicate ID must be rejected.
+	if err := rp.AddKey(makeKey(32), "v1", 0); !errors.Is(err, ErrInvalidKeyID) {
+		t.Errorf("AddKey duplicate id: got %v, want ErrInvalidKeyID", err)
+	}
 }
 
-func TestRotatingProvider_Close(t *testing.T) {
-	rp, err := NewRotatingProvider(makeKey(32), "v1", 0)
+func TestProvider_NameAndConnect(t *testing.T) {
+	ctx := context.Background()
+
+	p := mustNewProvider(t, makeKey(32), "my-key")
+	if got := p.Name(); got != "my-key" {
+		t.Errorf("Name() = %q, want %q", got, "my-key")
+	}
+	if err := p.Connect(ctx); err != nil {
+		t.Errorf("Connect: %v", err)
+	}
+}
+
+func TestKeyRingProvider_NameAndConnect(t *testing.T) {
+	ctx := context.Background()
+
+	rp := mustNewKeyRingProvider(t, makeKey(32), "v1", 0)
+	if got := rp.Name(); got != "v1" {
+		t.Errorf("Name() = %q, want %q", got, "v1")
+	}
+	if err := rp.Connect(ctx); err != nil {
+		t.Errorf("Connect: %v", err)
+	}
+
+	// Name reflects the current key after SetCurrentKey.
+	v2 := makeKey(32)
+	for i := range v2 {
+		v2[i] ^= 0xaa
+	}
+	if err := rp.AddKey(v2, "v2", 2); err != nil {
+		t.Fatal(err)
+	}
+	if err := rp.SetCurrentKey("v2"); err != nil {
+		t.Fatal(err)
+	}
+	if got := rp.Name(); got != "v2" {
+		t.Errorf("Name() after SetCurrentKey = %q, want %q", got, "v2")
+	}
+}
+
+func TestKeyRingProvider_Close(t *testing.T) {
+	rp, err := NewKeyRingProvider(makeKey(32), "v1", 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -238,8 +280,8 @@ func TestRotatingProvider_Close(t *testing.T) {
 	}
 }
 
-func TestRotatingProvider_Concurrent(t *testing.T) {
-	rp := mustNewRotatingProvider(t, makeKey(32), "v1", 0)
+func TestKeyRingProvider_Concurrent(t *testing.T) {
+	rp := mustNewKeyRingProvider(t, makeKey(32), "v1", 0)
 	ctx := context.Background()
 
 	var wg sync.WaitGroup
@@ -256,6 +298,171 @@ func TestRotatingProvider_Concurrent(t *testing.T) {
 			id := "v" + string(rune('A'+n%26))
 			_ = rp.AddKey(makeKey(32), id, 0) // may already exist
 		}(i)
+	}
+	wg.Wait()
+}
+
+func TestKeyRingProvider_NeedsReencryption(t *testing.T) {
+	ctx := context.Background()
+
+	v1 := makeKey(32)
+	v2 := makeKey(32)
+	for i := range v2 {
+		v2[i] ^= 0xaa
+	}
+
+	// Build a ring with v1 (rank 1) as old and v2 (rank 2) as current.
+	rp, err := NewKeyRingProvider(v2, "v2", 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = rp.Close() })
+	if err := rp.AddKey(v1, "v1", 1); err != nil {
+		t.Fatal(err)
+	}
+
+	// Helper: encrypt with a standalone single-key provider.
+	encryptWith := func(t *testing.T, keyBytes []byte, id string) []byte {
+		t.Helper()
+		p, err := NewProvider(keyBytes, id)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer p.Close()
+		ct, err := p.Encrypt(ctx, []byte("payload"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return ct
+	}
+
+	t.Run("current key returns false", func(t *testing.T) {
+		ct := encryptWith(t, v2, "v2")
+		got, err := rp.NeedsReencryption(ct)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if got {
+			t.Error("ciphertext from current key should not need re-encryption")
+		}
+	})
+
+	t.Run("older rank returns true", func(t *testing.T) {
+		ct := encryptWith(t, v1, "v1")
+		got, err := rp.NeedsReencryption(ct)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if !got {
+			t.Error("ciphertext from older key should need re-encryption")
+		}
+	})
+
+	t.Run("higher rank returns false", func(t *testing.T) {
+		// Simulate a future key with a higher rank than current.
+		v3 := makeKey(32)
+		for i := range v3 {
+			v3[i] ^= 0x55
+		}
+		ct := encryptWith(t, v3, "v3")
+		// v3 is not in the ring, so ordering is unknown — should return false.
+		got, err := rp.NeedsReencryption(ct)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if got {
+			t.Error("ciphertext from unknown key should return false, not true")
+		}
+	})
+
+	t.Run("unknown key ID returns false", func(t *testing.T) {
+		vUnknown := makeKey(32)
+		for i := range vUnknown {
+			vUnknown[i] ^= 0x33
+		}
+		ct := encryptWith(t, vUnknown, "unknown-id")
+		got, err := rp.NeedsReencryption(ct)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if got {
+			t.Error("unknown key ID should return false, not true")
+		}
+	})
+
+	t.Run("unparseable ciphertext returns error", func(t *testing.T) {
+		_, err := rp.NeedsReencryption([]byte("not valid ciphertext"))
+		if err == nil {
+			t.Error("expected error for invalid ciphertext")
+		}
+	})
+
+	t.Run("equal rank returns false", func(t *testing.T) {
+		// Add a key with same rank as current (2); it is older by ID but not by rank.
+		v2b := makeKey(32)
+		for i := range v2b {
+			v2b[i] ^= 0xbb
+		}
+		rp2, err := NewKeyRingProvider(v2, "v2", 2)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer rp2.Close()
+		if err := rp2.AddKey(v2b, "v2b", 2); err != nil {
+			t.Fatal(err)
+		}
+		ct := encryptWith(t, v2b, "v2b")
+		got, err := rp2.NeedsReencryption(ct)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if got {
+			t.Error("equal rank should return false")
+		}
+	})
+}
+
+func TestKeyRingProvider_NeedsReencryption_Concurrent(t *testing.T) {
+	ctx := context.Background()
+
+	v1 := makeKey(32)
+	v2 := makeKey(32)
+	for i := range v2 {
+		v2[i] ^= 0xaa
+	}
+
+	rp, err := NewKeyRingProvider(v2, "v2", 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = rp.Close() })
+	if err := rp.AddKey(v1, "v1", 1); err != nil {
+		t.Fatal(err)
+	}
+
+	oldP, err := NewProvider(v1, "v1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer oldP.Close()
+	ct, err := oldP.Encrypt(ctx, []byte("x"))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var wg sync.WaitGroup
+	for range 50 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			got, err := rp.NeedsReencryption(ct)
+			if err != nil {
+				t.Errorf("NeedsReencryption: %v", err)
+			}
+			if !got {
+				t.Error("expected true for older key")
+			}
+		}()
 	}
 	wg.Wait()
 }

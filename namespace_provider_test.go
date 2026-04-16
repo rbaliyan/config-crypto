@@ -254,3 +254,40 @@ func TestNamespaceSelector_Concurrent(t *testing.T) {
 	}
 	wg.Wait()
 }
+
+func TestScopedProvider_NameAndConnect(t *testing.T) {
+	ctx := context.Background()
+	pa := mustNewProvider(t, makeKey(32), "key-a")
+
+	sel, err := NewNamespaceSelector(WithNamespaceProvider("prod", pa))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer sel.Close()
+
+	scoped := sel.ForNamespace("prod")
+
+	// Name returns the namespace-prefixed string.
+	if got := scoped.Name(); got != "namespace:prod" {
+		t.Errorf("Name() = %q, want %q", got, "namespace:prod")
+	}
+
+	// Connect delegates to the underlying provider (no-op for staticProvider).
+	if err := scoped.Connect(ctx); err != nil {
+		t.Errorf("Connect: %v", err)
+	}
+
+	// Connect on a missing namespace returns ErrNoProviderForNamespace.
+	missing := sel.ForNamespace("missing")
+	if err := missing.Connect(ctx); !errors.Is(err, ErrNoProviderForNamespace) {
+		t.Errorf("Connect missing: got %v, want ErrNoProviderForNamespace", err)
+	}
+
+	// Connect on a closed selector returns ErrProviderClosed.
+	if err := sel.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := scoped.Connect(ctx); !errors.Is(err, ErrProviderClosed) {
+		t.Errorf("Connect after close: got %v, want ErrProviderClosed", err)
+	}
+}
