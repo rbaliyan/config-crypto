@@ -367,8 +367,8 @@ func TestNewCodecReturnsErrorOnNilProvider(t *testing.T) {
 // error wrapping.
 type failingProvider struct{}
 
-func (p *failingProvider) Name() string                         { return "failing" }
-func (p *failingProvider) Connect(_ context.Context) error      { return nil }
+func (p *failingProvider) Name() string                    { return "failing" }
+func (p *failingProvider) Connect(_ context.Context) error { return nil }
 func (p *failingProvider) Encrypt(_ context.Context, _ []byte) ([]byte, error) {
 	return nil, errors.New("encrypt unavailable")
 }
