@@ -107,6 +107,12 @@ func TestNew_Rotation(t *testing.T) {
 	}
 }
 
+func TestNew_NilClient(t *testing.T) {
+	if _, err := New(context.Background(), nil, WithEncryptedKey([]byte("enc:k1"), "key-1")); err == nil {
+		t.Error("expected error for nil client")
+	}
+}
+
 func TestNew_NoKeys(t *testing.T) {
 	if _, err := New(context.Background(), &mockClient{}); err == nil {
 		t.Error("expected error")

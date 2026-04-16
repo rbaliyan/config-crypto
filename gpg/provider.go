@@ -70,7 +70,7 @@ func WithEncryptedKey(ciphertext []byte, id string) Option {
 	}
 }
 
-// New creates a crypto.Provider that decrypts key material using GPG.
+// New creates a crypto.KeyRingProvider that decrypts key material using GPG.
 //
 // At least one key must be provided via WithEncryptedKey. The first key is the
 // current key for new encryptions; additional keys support decryption during
@@ -78,7 +78,11 @@ func WithEncryptedKey(ciphertext []byte, id string) Option {
 //
 // All keys are decrypted during construction and cached. The Client is not
 // retained after construction.
-func New(ctx context.Context, client Client, opts ...Option) (crypto.Provider, error) {
+func New(ctx context.Context, client Client, opts ...Option) (crypto.KeyRingProvider, error) {
+	if client == nil {
+		return nil, fmt.Errorf("gpg: Client must not be nil")
+	}
+
 	var o options
 	for _, opt := range opts {
 		opt(&o)
@@ -109,14 +113,14 @@ func New(ctx context.Context, client Client, opts ...Option) (crypto.Provider, e
 		keys = append(keys, decryptedKey{bytes: plaintext, id: ek.id})
 	}
 
-	var providerOpts []crypto.Option
-	for _, k := range keys[1:] {
-		providerOpts = append(providerOpts, crypto.WithOldKey(k.bytes, k.id, 0))
-	}
-
-	provider, err := crypto.NewProvider(keys[0].bytes, keys[0].id, providerOpts...)
+	ring, err := crypto.NewKeyRingProvider(keys[0].bytes, keys[0].id, 0)
 	if err != nil {
 		return nil, fmt.Errorf("gpg: %w", err)
 	}
-	return provider, nil
+	for _, k := range keys[1:] {
+		if err := ring.AddKey(k.bytes, k.id, 0); err != nil {
+			return nil, fmt.Errorf("gpg: %w", err)
+		}
+	}
+	return ring, nil
 }

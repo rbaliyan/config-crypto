@@ -90,7 +90,7 @@ func WithWrappedKeyAlgorithm(ciphertext []byte, id, keyName, keyVersion, algorit
 	}
 }
 
-// New creates a crypto.Provider that unwraps keys using Azure Key Vault.
+// New creates a crypto.KeyRingProvider that unwraps keys using Azure Key Vault.
 //
 // At least one key must be provided via WithWrappedKey. The first key is the
 // current key for new encryptions; additional keys are available for
@@ -98,7 +98,7 @@ func WithWrappedKeyAlgorithm(ciphertext []byte, id, keyName, keyVersion, algorit
 //
 // Keys are unwrapped during construction and cached. The Key Vault client is
 // not retained after construction.
-func New(ctx context.Context, client Client, opts ...Option) (crypto.Provider, error) {
+func New(ctx context.Context, client Client, opts ...Option) (crypto.KeyRingProvider, error) {
 	if client == nil {
 		return nil, fmt.Errorf("azurekv: Client must not be nil")
 	}
@@ -133,14 +133,14 @@ func New(ctx context.Context, client Client, opts ...Option) (crypto.Provider, e
 		keys = append(keys, decryptedKey{bytes: plaintext, id: wk.id})
 	}
 
-	var providerOpts []crypto.Option
-	for _, k := range keys[1:] {
-		providerOpts = append(providerOpts, crypto.WithOldKey(k.bytes, k.id, 0))
-	}
-
-	provider, err := crypto.NewProvider(keys[0].bytes, keys[0].id, providerOpts...)
+	ring, err := crypto.NewKeyRingProvider(keys[0].bytes, keys[0].id, 0)
 	if err != nil {
 		return nil, fmt.Errorf("azurekv: %w", err)
 	}
-	return provider, nil
+	for _, k := range keys[1:] {
+		if err := ring.AddKey(k.bytes, k.id, 0); err != nil {
+			return nil, fmt.Errorf("azurekv: %w", err)
+		}
+	}
+	return ring, nil
 }

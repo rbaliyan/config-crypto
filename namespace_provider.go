@@ -208,6 +208,24 @@ func (p *scopedProvider) HealthCheck(ctx context.Context) error {
 	return provider.HealthCheck(ctx)
 }
 
+// Name returns "namespace:" followed by the namespace string.
+func (p *scopedProvider) Name() string { return "namespace:" + p.namespace }
+
+// Connect delegates to the underlying provider for this namespace, if any.
+func (p *scopedProvider) Connect(ctx context.Context) error {
+	p.selector.mu.RLock()
+	if p.selector.closed {
+		p.selector.mu.RUnlock()
+		return ErrProviderClosed
+	}
+	provider := p.selector.resolveLocked(p.namespace)
+	p.selector.mu.RUnlock()
+	if provider == nil {
+		return fmt.Errorf("%w: %s", ErrNoProviderForNamespace, p.namespace)
+	}
+	return provider.Connect(ctx)
+}
+
 // Close on a scoped provider is a no-op; the underlying provider is owned by
 // the selector or by the caller that registered it.
 func (p *scopedProvider) Close() error { return nil }

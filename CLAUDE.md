@@ -28,6 +28,8 @@ The codec depends on a single abstraction:
 
 ```go
 type Provider interface {
+    Name() string
+    Connect(ctx context.Context) error
     Encrypt(ctx context.Context, plaintext []byte) ([]byte, error)
     Decrypt(ctx context.Context, ciphertext []byte) ([]byte, error)
     HealthCheck(ctx context.Context) error
@@ -35,10 +37,25 @@ type Provider interface {
 }
 ```
 
-Raw key bytes never leave a Provider — callers see only Encrypt/Decrypt. Two constructors:
+Raw key bytes never leave a Provider — callers see only Encrypt/Decrypt. `Name()` returns a short identifier used for logging/observability. `Connect()` initialises any remote connection; in-memory implementations treat it as a no-op.
 
-- `crypto.NewProvider(keyBytes, id, opts...)` — static, returns an unexported envelope Provider backed by a raw 32-byte AES-256 key. The common case.
-- `crypto.NewRotatingProvider(initialBytes, id, opts...)` — exported mutable Provider used by the vault package to drive runtime key rotation via `AddKey`/`SetCurrentKey`/`RemoveKey`. End users rarely construct directly.
+Two constructors:
+
+- `crypto.NewProvider(keyBytes, id)` — static, returns an unexported envelope Provider backed by a single 32-byte AES-256 key. The common case for single-key setups.
+- `crypto.NewKeyRingProvider(initialBytes, id, rank)` — returns a `KeyRingProvider` interface for runtime key rotation via `AddKey`/`SetCurrentKey`/`RemoveKey`. All KMS packages return this type.
+
+`KeyRingProvider` is an interface that embeds `Provider` and adds key rotation methods:
+
+```go
+type KeyRingProvider interface {
+    Provider
+    AddKey(keyBytes []byte, id string, rank uint64) error
+    SetCurrentKey(id string) error
+    RemoveKey(id string) error
+    CurrentKeyID() string
+    NeedsReencryption(ciphertext []byte) (bool, error)
+}
+```
 
 `NamespaceSelector` routes `Encrypt`/`Decrypt` to namespace-specific providers; `ForNamespace(ns) Provider` yields a scoped view. `RemoveAndClose` removes a namespace's provider and closes it in one step.
 
@@ -53,7 +70,7 @@ Each value gets a unique random DEK (Data Encryption Key), which is itself wrapp
 - **DEK zeroing**: ephemeral key material is cleared after use
 - **Defensive copies**: key bytes are copied on construction; header parsing copies slices from input
 - **Key material destruction**: `Provider.Close()` zeros all key material and blocks further operations; subsequent calls return `ErrProviderClosed`
-- **Input validation**: `NewCodec` errors on nil inner codec or Provider; `NewProvider`/`NewRotatingProvider`/`WithOldKey`/`AddKey` validate key size and ID
+- **Input validation**: `NewCodec` errors on nil inner codec or Provider; `NewProvider`/`NewKeyRingProvider`/`AddKey` validate key size, ID, and duplicate IDs
 
 ### Binary Format
 
@@ -77,8 +94,8 @@ A golden byte-vector test (`TestDecryptV1GoldenVector` + `TestGoldenV1Drift` in 
 | File | Contents |
 |------|----------|
 | `crypto.go` | `Codec` struct implementing `codec.Codec` + `codec.Transformer`; wraps inner codec; threads ctx to Provider |
-| `provider.go` | `Provider` interface, `Option`, `WithOldKey`, `NewProvider`, unexported `staticProvider` with `HealthCheck`/`Close` |
-| `rotating_provider.go` | `RotatingProvider` (exported, mutable) with `AddKey`/`SetCurrentKey`/`RemoveKey`/`HealthCheck`/`Close` |
+| `provider.go` | `Provider` interface (Name/Connect/Encrypt/Decrypt/HealthCheck/Close), `NewProvider`, unexported `staticProvider` |
+| `keyring_provider.go` | `KeyRingProvider` interface (embeds Provider + AddKey/SetCurrentKey/RemoveKey/CurrentKeyID/NeedsReencryption), `NewKeyRingProvider`, unexported `keyRingProvider` struct |
 | `namespace_provider.go` | `NamespaceSelector`, `WithNamespaceProvider`, `WithFallbackProvider`, `ForNamespace`, `AddProvider`, `RemoveProvider`, `RemoveAndClose`, `Close` |
 | `encrypt.go` | `encryptEnvelope` — generates DEK, encrypts data, wraps DEK with KEK, zeroes DEK, writes v2 header |
 | `decrypt.go` | `decryptEnvelope` — reads v1 or v2 header via `readHeader`, unwraps DEK (via `keyLookupFunc`), decrypts data, zeroes DEK |
@@ -100,25 +117,28 @@ All KMS providers are regular packages in this module (`github.com/rbaliyan/conf
 
 Common pattern (all providers):
 - Accept a `Client` interface for testability; the SDK wiring is a one-method wrapper the caller writes
-- Decrypt/unwrap keys at construction, copy into a `crypto.Provider`, discard the client
+- Decrypt/unwrap keys at construction using `NewKeyRingProvider` + `AddKey`, discard the client
 - Decrypted key bytes are zeroed after being copied into the provider
-- `HealthCheck` inherits liveness-only semantics from the underlying static provider (except `vault`, which also checks Vault reachability)
+- All return `crypto.KeyRingProvider`; `HealthCheck` is liveness-only (not remote connectivity)
 
 Vault package (**KV v2 only**):
-- Reads versioned secrets from a KV v2 path, maps each version to a key ID (via `WithKeyIDFormat`, default `strconv.Itoa`)
-- Optional background polling via `WithKeyVersionRefreshInterval` picks up new versions + promotes current automatically; exits on `Close`
-- `HealthCheck` calls `KVMetadata` to verify Vault reachability (readiness check)
+- `vault.New()` reads all versioned secrets at construction and returns `crypto.KeyRingProvider`
+- `vault.Poll(ctx, client, ring, mount, path, interval, opts...)` starts a background goroutine that picks up new versions + promotes current; returns a `stop func()` the caller defers
+- `WithRefreshErrorHandler` sets a callback for poll errors (default: slog)
 - Permanently-malformed versions are retried up to `maxVersionRetries=5` times, then skipped forever
-- **Note:** the prior Transit-based provider has been removed — ciphertext portability (ability to move DB contents between KMS backends) requires raw-bytes distribution, which Transit-style wrapping breaks
+- **Note:** the prior Transit-based provider has been removed — ciphertext portability requires raw-bytes distribution
 
 ### Key Rotation Flow
 
 1. Encrypt with `key-v1` as current
-2. Rotate: either
-   - Create a new Provider with `NewProvider(v2bytes, "key-v2", WithOldKey(v1bytes, "key-v1"))`, or
-   - Use a KMS sub-module that does this for you (vault KV with `WithKeyVersionRefreshInterval`)
+2. Rotate using `KeyRingProvider`:
+   ```go
+   ring, _ := crypto.NewKeyRingProvider(v2bytes, "key-v2", 2)
+   ring.AddKey(v1bytes, "key-v1", 1)  // available for decryption
+   ```
+   Or use a KMS package that does this for you (vault with `Poll`)
 3. Reads: header contains key ID → internal lookup finds old key → decrypts
-4. Writes: new values encrypted with the new current key
+4. Writes: new values encrypted with the current key
 
 ## Dependencies
 

@@ -6,13 +6,46 @@ import (
 	"sync"
 )
 
-// RotatingProvider is a mutable Provider that supports runtime key rotation.
+// KeyRingProvider is a mutable Provider that supports runtime key rotation.
 // Keys can be added, removed, and the current key switched at any time.
-// End users usually get a Provider from a KMS sub-module; this type is
-// exported so KMS modules can build on top of it.
+// End users usually get a KeyRingProvider from a KMS package; this interface
+// is exported so KMS packages can build on top of it.
 //
-// RotatingProvider is safe for concurrent use.
-type RotatingProvider struct {
+// KeyRingProvider is safe for concurrent use.
+type KeyRingProvider interface {
+	Provider
+
+	// AddKey adds a key that can be used for decryption or set as the current
+	// key. The keyBytes must be 32 bytes for AES-256 and id must not be empty.
+	// rank is the KV store version number for this key; it is used by
+	// NeedsReencryption to establish ordering. Pass 0 when the backing store
+	// does not provide version ordering. Returns ErrInvalidKeyID if the ID
+	// already exists.
+	AddKey(keyBytes []byte, id string, rank uint64) error
+
+	// SetCurrentKey switches the active encryption key to the given ID.
+	// The key must have been previously added via the constructor or AddKey.
+	SetCurrentKey(id string) error
+
+	// RemoveKey removes a key by ID. The current key cannot be removed.
+	RemoveKey(id string) error
+
+	// CurrentKeyID returns the ID of the key currently used for encryption.
+	CurrentKeyID() string
+
+	// NeedsReencryption reports whether ciphertext was encrypted with a key
+	// that is older than the current key, based on the rank recorded when each
+	// key was added. It returns true only when the current key has a strictly
+	// higher rank than the key embedded in the ciphertext header.
+	//
+	// It returns false (not true) when the ciphertext key is unknown to this
+	// provider, since ordering cannot be determined in that case.
+	// It returns an error only if the ciphertext header cannot be parsed.
+	NeedsReencryption(ciphertext []byte) (bool, error)
+}
+
+// keyRingProvider is the concrete implementation of KeyRingProvider.
+type keyRingProvider struct {
 	mu      sync.RWMutex
 	current keyEntry
 	keys    map[string]keyEntry
@@ -20,17 +53,16 @@ type RotatingProvider struct {
 }
 
 // Compile-time interface check.
-var _ Provider = (*RotatingProvider)(nil)
+var _ KeyRingProvider = (*keyRingProvider)(nil)
 
-// NewRotatingProvider creates a mutable Provider with the given initial key.
+// NewKeyRingProvider creates a mutable Provider with the given initial key.
 // The keyBytes must be 32 bytes for AES-256. The id identifies this key.
 // rank is the KV store version number for this key (e.g. the Vault KV version
 // integer cast to uint64); it is used by NeedsReencryption to determine
 // whether a given ciphertext was encrypted with an older key. Use 0 when the
 // backing store does not provide version ordering.
-// Old keys can be added with WithOldKey; pass the KV version as rank.
 // Key bytes are copied internally; the caller may safely zero the original after construction.
-func NewRotatingProvider(initialBytes []byte, id string, rank uint64, opts ...Option) (*RotatingProvider, error) {
+func NewKeyRingProvider(initialBytes []byte, id string, rank uint64) (KeyRingProvider, error) {
 	if len(initialBytes) != aesKeySize {
 		return nil, fmt.Errorf("%w: got %d bytes", ErrInvalidKeySize, len(initialBytes))
 	}
@@ -38,35 +70,35 @@ func NewRotatingProvider(initialBytes []byte, id string, rank uint64, opts ...Op
 		return nil, fmt.Errorf("%w: key ID must not be empty", ErrInvalidKeyID)
 	}
 
-	o := &providerOptions{}
-	for _, opt := range opts {
-		opt(o)
-	}
-	if o.err != nil {
-		return nil, o.err
-	}
-
-	keys := make(map[string]keyEntry, 1+len(o.oldKeys))
-	for _, old := range o.oldKeys {
-		if _, exists := keys[old.id]; exists {
-			return nil, fmt.Errorf("%w: duplicate key ID %q", ErrInvalidKeyID, old.id)
-		}
-		keys[old.id] = keyEntry{id: old.id, bytes: old.bytes, generation: old.rank}
-	}
-
 	b := make([]byte, aesKeySize)
 	copy(b, initialBytes)
 	current := keyEntry{id: id, bytes: b, generation: rank}
-	keys[id] = current
 
-	return &RotatingProvider{
+	// Separate copy for the lookup map so that Close() zeroing the map entry
+	// and zeroing current.bytes do not alias the same backing array.
+	kb := make([]byte, aesKeySize)
+	copy(kb, b)
+	keys := make(map[string]keyEntry, 1)
+	keys[id] = keyEntry{id: id, bytes: kb, generation: rank}
+
+	return &keyRingProvider{
 		current: current,
 		keys:    keys,
 	}, nil
 }
 
+// Name returns the ID of the current encryption key.
+func (p *keyRingProvider) Name() string {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	return p.current.id
+}
+
+// Connect is a no-op for keyRingProvider.
+func (p *keyRingProvider) Connect(_ context.Context) error { return nil }
+
 // Encrypt encrypts plaintext using envelope encryption with the current key.
-func (p *RotatingProvider) Encrypt(_ context.Context, plaintext []byte) ([]byte, error) {
+func (p *keyRingProvider) Encrypt(_ context.Context, plaintext []byte) ([]byte, error) {
 	p.mu.RLock()
 	defer p.mu.RUnlock()
 	if p.closed {
@@ -76,7 +108,7 @@ func (p *RotatingProvider) Encrypt(_ context.Context, plaintext []byte) ([]byte,
 }
 
 // Decrypt decrypts ciphertext using the key identified in the header.
-func (p *RotatingProvider) Decrypt(_ context.Context, ciphertext []byte) ([]byte, error) {
+func (p *keyRingProvider) Decrypt(_ context.Context, ciphertext []byte) ([]byte, error) {
 	p.mu.RLock()
 	defer p.mu.RUnlock()
 	if p.closed {
@@ -86,7 +118,7 @@ func (p *RotatingProvider) Decrypt(_ context.Context, ciphertext []byte) ([]byte
 }
 
 // HealthCheck returns nil unless Close has been called.
-func (p *RotatingProvider) HealthCheck(_ context.Context) error {
+func (p *keyRingProvider) HealthCheck(_ context.Context) error {
 	p.mu.RLock()
 	defer p.mu.RUnlock()
 	if p.closed {
@@ -97,7 +129,7 @@ func (p *RotatingProvider) HealthCheck(_ context.Context) error {
 
 // Close zeros all key material and blocks further operations.
 // Safe to call multiple times; subsequent calls are no-ops.
-func (p *RotatingProvider) Close() error {
+func (p *keyRingProvider) Close() error {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	if p.closed {
@@ -116,11 +148,10 @@ func (p *RotatingProvider) Close() error {
 // AddKey adds a key that can be used for decryption or set as the current key.
 // The keyBytes must be 32 bytes for AES-256 and id must not be empty.
 // rank is the KV store version number for this key; it is used by
-// NeedsReencryption to establish ordering across restarts. Pass the same
-// value that the backing store (e.g. Vault KV version) provides so that
-// the ordering is stable even after a process restart.
+// NeedsReencryption to establish ordering across restarts.
+// Returns ErrInvalidKeyID if the ID already exists.
 // Key bytes are copied internally.
-func (p *RotatingProvider) AddKey(keyBytes []byte, id string, rank uint64) error {
+func (p *keyRingProvider) AddKey(keyBytes []byte, id string, rank uint64) error {
 	if len(keyBytes) != aesKeySize {
 		return fmt.Errorf("%w: key %q has %d bytes", ErrInvalidKeySize, id, len(keyBytes))
 	}
@@ -136,13 +167,16 @@ func (p *RotatingProvider) AddKey(keyBytes []byte, id string, rank uint64) error
 	if p.closed {
 		return ErrProviderClosed
 	}
+	if _, exists := p.keys[id]; exists {
+		return fmt.Errorf("%w: duplicate key ID %q", ErrInvalidKeyID, id)
+	}
 	p.keys[id] = keyEntry{id: id, bytes: b, generation: rank}
 	return nil
 }
 
 // SetCurrentKey switches the active encryption key to the given ID.
 // The key must have been previously added via the constructor or AddKey.
-func (p *RotatingProvider) SetCurrentKey(id string) error {
+func (p *keyRingProvider) SetCurrentKey(id string) error {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	if p.closed {
@@ -161,7 +195,7 @@ func (p *RotatingProvider) SetCurrentKey(id string) error {
 }
 
 // RemoveKey removes a key by ID. The current key cannot be removed.
-func (p *RotatingProvider) RemoveKey(id string) error {
+func (p *keyRingProvider) RemoveKey(id string) error {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	if p.closed {
@@ -182,7 +216,7 @@ func (p *RotatingProvider) RemoveKey(id string) error {
 }
 
 // CurrentKeyID returns the ID of the key currently used for encryption.
-func (p *RotatingProvider) CurrentKeyID() string {
+func (p *keyRingProvider) CurrentKeyID() string {
 	p.mu.RLock()
 	defer p.mu.RUnlock()
 	return p.current.id
@@ -190,15 +224,8 @@ func (p *RotatingProvider) CurrentKeyID() string {
 
 // NeedsReencryption reports whether ciphertext was encrypted with a key that
 // is older than the current key, based on the rank (KV store version) recorded
-// when each key was added. It returns true only when the current key has a
-// strictly higher rank than the key embedded in the ciphertext header, so
-// instances that have not yet rotated to a newer key will not re-encrypt
-// backwards during a rolling restart.
-//
-// It returns false (not true) when the ciphertext key is unknown to this
-// provider, since ordering cannot be determined in that case.
-// It returns an error only if the ciphertext header cannot be parsed.
-func (p *RotatingProvider) NeedsReencryption(ciphertext []byte) (bool, error) {
+// when each key was added.
+func (p *keyRingProvider) NeedsReencryption(ciphertext []byte) (bool, error) {
 	h, _, err := readHeader(ciphertext)
 	if err != nil {
 		return false, err
@@ -220,7 +247,7 @@ func (p *RotatingProvider) NeedsReencryption(ciphertext []byte) (bool, error) {
 }
 
 // keyByID returns a copy of key bytes for the given ID. Caller must hold at least a read lock.
-func (p *RotatingProvider) keyByID(id string) ([]byte, error) {
+func (p *keyRingProvider) keyByID(id string) ([]byte, error) {
 	k, ok := p.keys[id]
 	if !ok {
 		return nil, fmt.Errorf("%w: %s", ErrKeyNotFound, id)

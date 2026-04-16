@@ -13,9 +13,9 @@ func makeKey(size int) []byte {
 }
 
 // mustNewProvider builds a Provider from raw bytes or fatals.
-func mustNewProvider(t testing.TB, keyBytes []byte, id string, opts ...Option) Provider {
+func mustNewProvider(t testing.TB, keyBytes []byte, id string) Provider {
 	t.Helper()
-	p, err := NewProvider(keyBytes, id, opts...)
+	p, err := NewProvider(keyBytes, id)
 	if err != nil {
 		t.Fatalf("NewProvider: %v", err)
 	}
@@ -23,13 +23,13 @@ func mustNewProvider(t testing.TB, keyBytes []byte, id string, opts ...Option) P
 	return p
 }
 
-// mustNewRotatingProvider builds a RotatingProvider or fatals.
+// mustNewKeyRingProvider builds a KeyRingProvider or fatals.
 // rank is the KV store version for the initial key; pass 0 when ordering is not needed.
-func mustNewRotatingProvider(t testing.TB, keyBytes []byte, id string, rank uint64, opts ...Option) *RotatingProvider {
+func mustNewKeyRingProvider(t testing.TB, keyBytes []byte, id string, rank uint64) KeyRingProvider {
 	t.Helper()
-	p, err := NewRotatingProvider(keyBytes, id, rank, opts...)
+	p, err := NewKeyRingProvider(keyBytes, id, rank)
 	if err != nil {
-		t.Fatalf("NewRotatingProvider: %v", err)
+		t.Fatalf("NewKeyRingProvider: %v", err)
 	}
 	t.Cleanup(func() { _ = p.Close() })
 	return p

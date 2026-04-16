@@ -85,6 +85,8 @@ Each value uses **envelope encryption**: a random Data Encryption Key (DEK) encr
 
 ```go
 type Provider interface {
+    Name() string
+    Connect(ctx context.Context) error
     Encrypt(ctx context.Context, plaintext []byte) ([]byte, error)
     Decrypt(ctx context.Context, ciphertext []byte) ([]byte, error)
     HealthCheck(ctx context.Context) error
@@ -92,46 +94,49 @@ type Provider interface {
 }
 ```
 
-`Provider` is the single abstraction the codec depends on. Raw key bytes never leave the provider — callers see only Encrypt/Decrypt. `HealthCheck` returns nil for a healthy provider; static providers report liveness only (not closed), while providers with a live backend (e.g. the Vault KV provider) also probe reachability. `Close` zeros key material and stops any background goroutines.
+`Provider` is the single abstraction the codec depends on. Raw key bytes never leave the provider — callers see only Encrypt/Decrypt. `Name()` returns a short identifier used for logging and observability. `Connect` initialises any remote connection; in-memory implementations treat it as a no-op. `HealthCheck` returns nil for a healthy provider; static providers report liveness only (not closed). `Close` zeros key material and stops any background goroutines.
 
 Two constructors live in the core package:
 
-- `crypto.NewProvider(keyBytes, id, opts...)` — static, from raw 32-byte key bytes. Most common.
-- `crypto.NewRotatingProvider(initialBytes, id, opts...)` — mutable, exposed so KMS sub-modules can drive runtime key rotation. End users rarely construct this directly.
+- `crypto.NewProvider(keyBytes, id)` — static, from raw 32-byte AES-256 key bytes. Most common for single-key setups.
+- `crypto.NewKeyRingProvider(initialBytes, id, rank)` — mutable `KeyRingProvider`, exposed so KMS packages and application code can drive runtime key rotation. `rank` is a monotonically increasing version number used by `NeedsReencryption` to determine key ordering; pass `0` when the backing store does not provide version ordering.
 
 ## Key Rotation
 
-### Static (restart-free is not needed)
+`KeyRingProvider` embeds `Provider` and adds key management methods:
+
+```go
+type KeyRingProvider interface {
+    Provider
+    AddKey(keyBytes []byte, id string, rank uint64) error
+    SetCurrentKey(id string) error
+    RemoveKey(id string) error
+    CurrentKeyID() string
+    NeedsReencryption(ciphertext []byte) (bool, error)
+}
+```
+
+`rank` is used by `NeedsReencryption` to determine ordering: it returns `true` only when the ciphertext was encrypted with a key whose rank is strictly lower than the current key's rank.
 
 ```go
 oldKey := []byte("original-32-byte-key-for-aes!!!")
 newKey := []byte("rotated-32-byte-key-for-aes!!!!")
 
-provider, _ := crypto.NewProvider(newKey, "key-v2",
-    crypto.WithOldKey(oldKey, "key-v1"),
-)
-defer provider.Close()
-encJSON, _ := crypto.NewCodec(codec.Default(), provider)
+ring, _ := crypto.NewKeyRingProvider(newKey, "key-v2", 2)
+defer ring.Close()
+ring.AddKey(oldKey, "key-v1", 1)
+
+encJSON, _ := crypto.NewCodec(codec.Default(), ring)
 codec.Register(encJSON)
 
 // Reads automatically use the correct key (key ID is in the header).
-// Writes use the new key.
-```
+// Writes use the current key (key-v2).
 
-### Dynamic (runtime rotation without restart)
+// Check whether a stored ciphertext should be re-encrypted.
+needsReenc, _ := ring.NeedsReencryption(storedCiphertext) // true for key-v1 ciphertext
 
-`RotatingProvider` supports runtime key management. End-user code typically does not construct one directly — KMS sub-modules (e.g. `vault.New` with `WithKeyVersionRefreshInterval`) build and drive one for you. If you need manual control:
-
-```go
-rp, _ := crypto.NewRotatingProvider(initialKey, "key-v1")
-defer rp.Close()
-
-// Add a new key and switch to it.
-rp.AddKey(newKey, "key-v2")
-rp.SetCurrentKey("key-v2")
-
-// Remove old key when no longer needed for decryption.
-rp.RemoveKey("key-v1")
+// Remove old key when nothing in the store was encrypted with it.
+ring.RemoveKey("key-v1")
 ```
 
 ## Namespace Routing
@@ -159,22 +164,32 @@ codecB, _ := crypto.NewCodec(codec.Default(), sel.ForNamespace("tenant-b"))
 
 ## KMS Providers
 
-Each KMS provider is a **separate Go module** — you only pull the SDK you need. All of them return a `crypto.Provider`; internally they construct one of the canonical Providers above using key material fetched from the backend.
+All KMS providers are packages within the `github.com/rbaliyan/config-crypto` module — a single `go get github.com/rbaliyan/config-crypto` imports them all. Each provider returns a `crypto.KeyRingProvider`; internally it fetches key material from the backend and constructs a ring provider.
 
-### AWS KMS
+Each provider accepts a narrow `Client` interface using only stdlib types — you supply a one-method wrapper around your chosen SDK. This keeps the provider packages free of SDK dependencies.
 
 ```bash
-go get github.com/rbaliyan/config-crypto/awskms
+go get github.com/rbaliyan/config-crypto
 ```
+
+### AWS KMS
 
 ```go
 import "github.com/rbaliyan/config-crypto/awskms"
 
-cfg, _ := awsconfig.LoadDefaultConfig(ctx)
-kmsClient := kms.NewFromConfig(cfg)
+// awskms.Client requires: Decrypt(ctx, keyID string, ciphertext []byte) ([]byte, error)
+type myAWSClient struct{ sdk *kms.Client }
+func (c *myAWSClient) Decrypt(ctx context.Context, keyID string, ciphertext []byte) ([]byte, error) {
+    out, err := c.sdk.Decrypt(ctx, &kms.DecryptInput{CiphertextBlob: ciphertext, KeyId: aws.String(keyID)})
+    if err != nil {
+        return nil, err
+    }
+    return out.Plaintext, nil
+}
 
-provider, _ := awskms.New(ctx, kmsClient,
-    awskms.WithEncryptedKey(encryptedKeyBytes, "key-1"),
+cfg, _ := awsconfig.LoadDefaultConfig(ctx)
+provider, _ := awskms.New(ctx, &myAWSClient{sdk: kms.NewFromConfig(cfg)},
+    awskms.WithEncryptedKey(encryptedKeyBytes, "key-1", "arn:aws:kms:..."),
 )
 defer provider.Close()
 encJSON, _ := crypto.NewCodec(codec.Default(), provider)
@@ -182,32 +197,50 @@ encJSON, _ := crypto.NewCodec(codec.Default(), provider)
 
 ### GCP Cloud KMS
 
-```bash
-go get github.com/rbaliyan/config-crypto/gcpkms
-```
-
 ```go
 import "github.com/rbaliyan/config-crypto/gcpkms"
 
-client, _ := kms.NewKeyManagementClient(ctx)
-provider, _ := gcpkms.New(ctx, client,
-    gcpkms.WithEncryptedKey(ciphertext, "key-1", "projects/p/locations/l/keyRings/r/cryptoKeys/k"),
+// gcpkms.Client requires: Decrypt(ctx, resourceName string, ciphertext []byte) ([]byte, error)
+type myGCPClient struct{ sdk *kms.KeyManagementClient }
+func (c *myGCPClient) Decrypt(ctx context.Context, resourceName string, ciphertext []byte) ([]byte, error) {
+    resp, err := c.sdk.AsymmetricDecrypt(ctx, &kmspb.AsymmetricDecryptRequest{
+        Name:       resourceName,
+        Ciphertext: ciphertext,
+    })
+    if err != nil {
+        return nil, err
+    }
+    return resp.Plaintext, nil
+}
+
+kmsSDK, _ := kms.NewKeyManagementClient(ctx)
+provider, _ := gcpkms.New(ctx, &myGCPClient{sdk: kmsSDK},
+    gcpkms.WithEncryptedKey(encryptedBytes, "key-1", "projects/p/locations/l/keyRings/r/cryptoKeys/k"),
 )
 defer provider.Close()
 ```
 
 ### Azure Key Vault
 
-```bash
-go get github.com/rbaliyan/config-crypto/azurekv
-```
-
 ```go
 import "github.com/rbaliyan/config-crypto/azurekv"
 
+// azurekv.Client requires: UnwrapKey(ctx, keyName, keyVersion, algorithm string, ciphertext []byte) ([]byte, error)
+type myAzureClient struct{ sdk *azkeys.Client }
+func (c *myAzureClient) UnwrapKey(ctx context.Context, keyName, keyVersion, algorithm string, ciphertext []byte) ([]byte, error) {
+    resp, err := c.sdk.UnwrapKey(ctx, keyName, keyVersion, azkeys.KeyOperationParameters{
+        Algorithm: (*azkeys.JSONWebKeyEncryptionAlgorithm)(&algorithm),
+        Value:     ciphertext,
+    }, nil)
+    if err != nil {
+        return nil, err
+    }
+    return resp.Result, nil
+}
+
 cred, _ := azidentity.NewDefaultAzureCredential(nil)
-client, _ := azkeys.NewClient("https://my-vault.vault.azure.net/", cred, nil)
-provider, _ := azurekv.New(ctx, client,
+sdk, _ := azkeys.NewClient("https://my-vault.vault.azure.net/", cred, nil)
+provider, _ := azurekv.New(ctx, &myAzureClient{sdk: sdk},
     azurekv.WithWrappedKey(wrappedBytes, "key-1", "my-key", "v1"),
 )
 defer provider.Close()
@@ -215,33 +248,28 @@ defer provider.Close()
 
 ### HashiCorp Vault (KV v2)
 
-```bash
-go get github.com/rbaliyan/config-crypto/vault
-```
-
-Backed by the Vault KV v2 secrets engine. Each secret version becomes one key; the version number is used as the key ID. Supports optional background polling for new versions.
+Backed by the Vault KV v2 secrets engine. Each secret version becomes one key entry; the KV version number is used as the rank for `NeedsReencryption` ordering.
 
 ```go
 import "github.com/rbaliyan/config-crypto/vault"
 
-// Bring your own Client (HTTP-backed struct satisfying vault.Client).
-provider, _ := vault.New(ctx, client, "secret", "config-crypto/keys",
-    vault.WithKeyVersionRefreshInterval(30 * time.Second),
-)
-defer provider.Close() // stops the background poller
+// vault.Client requires KVMetadata + KVGet (see package doc for full interface).
+ring, _ := vault.New(ctx, client, "secret", "config-crypto/keys")
+defer ring.Close()
+
+// Optional: start a background goroutine that polls for new key versions.
+stop, _ := vault.Poll(ctx, client, ring, "secret", "config-crypto/keys", 30*time.Second)
+defer stop()
 ```
 
-> **Note:** The previous Transit-based provider (which decrypted a wrapped key at startup) has been removed. Transit-wrapped ciphertext is not portable across KMS backends; this library favours raw-bytes distribution so the database of encrypted values stays portable for its full lifetime, regardless of where the operator chooses to store KEKs tomorrow.
+> **Note:** The previous Transit-based provider has been removed. Transit-wrapped ciphertext is not portable across KMS backends; this library favours raw-bytes distribution so the database of encrypted values stays portable for its full lifetime.
 
 ### GPG
-
-```bash
-go get github.com/rbaliyan/config-crypto/gpg
-```
 
 ```go
 import "github.com/rbaliyan/config-crypto/gpg"
 
+// gpg.Client requires: Decrypt(ctx, ciphertext []byte) ([]byte, error)
 encryptedKey, _ := os.ReadFile("keys/current.key.gpg")
 client := gpg.NewExecClient() // uses system gpg binary
 provider, _ := gpg.New(ctx, client,
@@ -252,14 +280,13 @@ defer provider.Close()
 
 Suited for non-server deployments where keys are distributed as GPG-encrypted files alongside the application.
 
-All KMS providers decrypt their key material at construction time, copy it into a local envelope provider, and discard the KMS client. KMS providers are static by default; for dynamic key rotation use the Vault KV provider with `WithKeyVersionRefreshInterval`, or build a `RotatingProvider` yourself and swap keys manually.
+All KMS providers decrypt their key material at construction time, copy it into a local ring provider, and discard the client. For live rotation without restart, use `vault.Poll` or call `ring.AddKey`/`ring.SetCurrentKey` manually when new key material is available.
 
 ## HealthCheck
 
 `HealthCheck(ctx)` returns nil when the provider is usable. Its semantics depend on the backing provider:
 
-- **Static providers** (`NewProvider`, `NewRotatingProvider`, and the AWS/GCP/Azure/GPG KMS wrappers) report *liveness only* — nil unless `Close` has been called. They do not contact any backend.
-- **Vault KV provider** reports *readiness* — it calls `KVMetadata` on every HealthCheck to verify Vault is reachable. Use the `ctx` deadline to bound this round-trip.
+- **Static providers** (`NewProvider`, `NewKeyRingProvider`, and all KMS wrappers) report *liveness only* — nil unless `Close` has been called. They do not contact any backend.
 - **NamespaceSelector**: `sel.ForNamespace(ns).HealthCheck(ctx)` delegates to the registered provider for that namespace (or returns `ErrNoProviderForNamespace`).
 
 ## Binary Format
@@ -284,4 +311,4 @@ Key material is defensively copied and zeroed when the Provider is closed (via `
 
 ## Known Gaps
 
-- **Automatic key rotation outside the Vault KV provider.** The Vault KV provider has a built-in poller (`WithKeyVersionRefreshInterval`). The AWS/GCP/Azure/GPG providers do not — callers who want rotation for those backends must build a new Provider periodically and swap it, or construct a `RotatingProvider` manually and drive `AddKey`/`SetCurrentKey` themselves. A follow-up may add parity.
+- **Automatic key rotation outside the Vault KV provider.** The Vault KV provider has a standalone `vault.Poll` helper for background rotation. The AWS/GCP/Azure/GPG providers do not — callers who want rotation for those backends must build a new Provider periodically and swap it, or obtain a `KeyRingProvider` via `NewKeyRingProvider` and drive `AddKey`/`SetCurrentKey` themselves. A follow-up may add parity.

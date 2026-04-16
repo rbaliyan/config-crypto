@@ -11,12 +11,12 @@ We currently only support the latest version of the project.
 ## Security Measures
 
 - **Static Analysis**: [gosec](https://github.com/securego/gosec) runs on every PR and push to main
-- **Vulnerability Scanning**: [govulncheck](https://pkg.go.dev/golang.org/x/vuln/cmd/govulncheck) checks all modules including KMS sub-modules
+- **Vulnerability Scanning**: [govulncheck](https://pkg.go.dev/golang.org/x/vuln/cmd/govulncheck) checks all packages including KMS provider packages
 - **Fuzz Testing**: [ClusterFuzzLite](https://google.github.io/clusterfuzzlite/) continuously fuzzes encryption/decryption operations
 - **Code Scanning**: GitHub CodeQL analysis on every PR
 - **Dependency Pinning**: All CI actions and tools are pinned by hash
 - **Dependency Updates**: Dependabot monitors for outdated and vulnerable dependencies
-- **Key Material Safety**: DEKs are zeroed after use, providers support `Destroy()` for KEK cleanup
+- **Key Material Safety**: DEKs are zeroed after use, providers support `Close()` for KEK cleanup
 
 ## Reporting a Vulnerability
 

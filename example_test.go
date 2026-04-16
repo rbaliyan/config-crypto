@@ -74,7 +74,7 @@ func ExampleNewCodec_withConfig() {
 	// Resolved: encrypted:json
 }
 
-func ExampleNewProvider_rotation() {
+func ExampleNewKeyRingProvider_rotation() {
 	ctx := context.Background()
 
 	oldKey := make([]byte, 32)
@@ -97,17 +97,20 @@ func ExampleNewProvider_rotation() {
 		panic(err)
 	}
 
-	// Rotate: new provider has both keys; current is v2.
+	// Rotate: KeyRingProvider has both keys; current is v2.
 	newKey := make([]byte, 32)
 	for i := range newKey {
 		newKey[i] = byte(i + 100)
 	}
-	newP, err := crypto.NewProvider(newKey, "key-v2", crypto.WithOldKey(oldKey, "key-v1", 0))
+	ring, err := crypto.NewKeyRingProvider(newKey, "key-v2", 2)
 	if err != nil {
 		panic(err)
 	}
-	defer newP.Close()
-	newCodec, err := crypto.NewCodec(jsoncodec.New(), newP)
+	defer ring.Close()
+	if err := ring.AddKey(oldKey, "key-v1", 1); err != nil {
+		panic(err)
+	}
+	newCodec, err := crypto.NewCodec(jsoncodec.New(), ring)
 	if err != nil {
 		panic(err)
 	}

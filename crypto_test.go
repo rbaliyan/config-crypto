@@ -157,7 +157,15 @@ func TestCodecKeyRotation(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	newP := mustNewProvider(t, newKey, "key-v2", WithOldKey(oldKey, "key-v1", 0))
+	// KeyRingProvider with new key as current and old key for decryption.
+	newP, err := NewKeyRingProvider(newKey, "key-v2", 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = newP.Close() })
+	if err := newP.AddKey(oldKey, "key-v1", 1); err != nil {
+		t.Fatal(err)
+	}
 	newCodec, err := NewCodec(jsoncodec.New(), newP)
 	if err != nil {
 		t.Fatal(err)
@@ -359,6 +367,8 @@ func TestNewCodecReturnsErrorOnNilProvider(t *testing.T) {
 // error wrapping.
 type failingProvider struct{}
 
+func (p *failingProvider) Name() string                    { return "failing" }
+func (p *failingProvider) Connect(_ context.Context) error { return nil }
 func (p *failingProvider) Encrypt(_ context.Context, _ []byte) ([]byte, error) {
 	return nil, errors.New("encrypt unavailable")
 }
