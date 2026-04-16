@@ -26,16 +26,6 @@ jobs:
       - name: Run tests
         run: go test -race -coverprofile=coverage.out ./...
 
-      - name: Test KMS providers
-        run: |
-          for mod in awskms gcpkms azurekv vault; do
-            cd $mod
-            go mod edit -replace github.com/rbaliyan/config-crypto=../
-            go mod tidy
-            go test -race ./...
-            cd ..
-          done
-
   lint:
     name: Lint
     runs-on: ubuntu-latest
@@ -54,15 +44,7 @@ jobs:
           args: --tests=false
 
       - name: Run go vet
-        run: |
-          go vet ./...
-          for mod in awskms gcpkms azurekv vault; do
-            cd $mod
-            go mod edit -replace github.com/rbaliyan/config-crypto=../
-            go mod tidy
-            go vet ./...
-            cd ..
-          done
+        run: go vet ./...
 
       - name: Check formatting
         run: |

@@ -1,16 +1,21 @@
 // Package awskms provides a crypto.Provider backed by AWS KMS.
 //
-// Keys are fetched from KMS at construction time and cached in memory.
-// The provider uses AWS KMS Decrypt to unwrap encrypted key material
-// that has been previously generated via GenerateDataKey or Encrypt.
+// Keys are decrypted at construction time using a Client interface. Wire up
+// the AWS SDK v2 by implementing Client with a one-method wrapper:
 //
-// Usage:
+//	type myAWSClient struct{ kms *kms.Client }
 //
-//	cfg, err := awsconfig.LoadDefaultConfig(ctx)
-//	kmsClient := kms.NewFromConfig(cfg)
+//	func (c *myAWSClient) Decrypt(ctx context.Context, keyID string, ciphertext []byte) ([]byte, error) {
+//	    in := &kms.DecryptInput{CiphertextBlob: ciphertext}
+//	    if keyID != "" { in.KeyId = aws.String(keyID) }
+//	    out, err := c.kms.Decrypt(ctx, in)
+//	    if err != nil { return nil, err }
+//	    return out.Plaintext, nil
+//	}
 //
-//	provider, err := awskms.New(ctx, kmsClient, "key-1",
-//	    awskms.WithEncryptedKey(encryptedKeyBytes),
+//	cfg, _ := awsconfig.LoadDefaultConfig(ctx)
+//	provider, err := awskms.New(ctx, &myAWSClient{kms.NewFromConfig(cfg)},
+//	    awskms.WithEncryptedKey(encryptedKeyBytes, "key-1"),
 //	)
 package awskms
 
@@ -18,13 +23,17 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/aws/aws-sdk-go-v2/service/kms"
 	crypto "github.com/rbaliyan/config-crypto"
 )
 
-// Client is the subset of the AWS KMS API used by this provider.
+// Client unwraps an AES-256 data key that was encrypted by AWS KMS.
+// Implement this interface by calling the AWS KMS Decrypt API with your SDK of
+// choice. See the package-level doc for a wiring example using aws-sdk-go-v2.
 type Client interface {
-	Decrypt(ctx context.Context, params *kms.DecryptInput, optFns ...func(*kms.Options)) (*kms.DecryptOutput, error)
+	// Decrypt decrypts a data key ciphertext produced by AWS KMS.
+	// keyID is the KMS key ARN or alias; pass an empty string to let KMS
+	// determine the key from the ciphertext context.
+	Decrypt(ctx context.Context, keyID string, ciphertext []byte) (plaintext []byte, err error)
 }
 
 // Option configures a Provider.
@@ -53,9 +62,9 @@ func WithEncryptedKey(ciphertext []byte, id string) Option {
 	}
 }
 
-// WithEncryptedKeyForKMSKey is like WithEncryptedKey but specifies the KMS key ARN
-// or alias to use for decryption. Use this when the ciphertext was encrypted with
-// a specific KMS key.
+// WithEncryptedKeyForKMSKey is like WithEncryptedKey but specifies the KMS key
+// ARN or alias to use for decryption. Use this when the ciphertext was
+// encrypted with a specific KMS key.
 func WithEncryptedKeyForKMSKey(ciphertext []byte, id, kmsKeyID string) Option {
 	return func(o *options) {
 		o.encryptedKeys = append(o.encryptedKeys, encryptedKeyEntry{
@@ -75,6 +84,10 @@ func WithEncryptedKeyForKMSKey(ciphertext []byte, id, kmsKeyID string) Option {
 // Keys are decrypted during construction and cached. The KMS client is not
 // retained after construction.
 func New(ctx context.Context, client Client, opts ...Option) (crypto.Provider, error) {
+	if client == nil {
+		return nil, fmt.Errorf("awskms: Client must not be nil")
+	}
+
 	var o options
 	for _, opt := range opts {
 		opt(&o)
@@ -95,18 +108,14 @@ func New(ctx context.Context, client Client, opts ...Option) (crypto.Provider, e
 		}
 	}()
 	for _, ek := range o.encryptedKeys {
-		input := &kms.DecryptInput{CiphertextBlob: ek.ciphertext}
-		if ek.kmsKeyID != "" {
-			input.KeyId = &ek.kmsKeyID
-		}
-		out, err := client.Decrypt(ctx, input)
+		plaintext, err := client.Decrypt(ctx, ek.kmsKeyID, ek.ciphertext)
 		if err != nil {
 			return nil, fmt.Errorf("awskms: failed to decrypt key %q: %w", ek.id, err)
 		}
-		if len(out.Plaintext) != 32 {
-			return nil, fmt.Errorf("awskms: decrypted key %q is %d bytes, want 32", ek.id, len(out.Plaintext))
+		if len(plaintext) != 32 {
+			return nil, fmt.Errorf("awskms: decrypted key %q is %d bytes, want 32", ek.id, len(plaintext))
 		}
-		keys = append(keys, decryptedKey{bytes: out.Plaintext, id: ek.id})
+		keys = append(keys, decryptedKey{bytes: plaintext, id: ek.id})
 	}
 
 	var providerOpts []crypto.Option

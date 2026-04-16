@@ -1,15 +1,20 @@
 // Package azurekv provides a crypto.Provider backed by Azure Key Vault.
 //
-// Keys are fetched from Key Vault at construction time and cached in memory.
-// The provider uses the UnwrapKey operation to decrypt key material that was
-// previously wrapped with WrapKey.
+// Keys are unwrapped at construction time using a Client interface. Wire up
+// the Azure SDK by implementing Client with a one-method wrapper:
 //
-// Usage:
+//	type myAzureClient struct{ kv *azkeys.Client }
 //
-//	cred, err := azidentity.NewDefaultAzureCredential(nil)
-//	client, err := azkeys.NewClient("https://my-vault.vault.azure.net/", cred, nil)
+//	func (c *myAzureClient) UnwrapKey(ctx context.Context, keyName, keyVersion, algorithm string, ciphertext []byte) ([]byte, error) {
+//	    alg := azkeys.EncryptionAlgorithm(algorithm)
+//	    resp, err := c.kv.UnwrapKey(ctx, keyName, keyVersion, azkeys.KeyOperationParameters{Algorithm: &alg, Value: ciphertext}, nil)
+//	    if err != nil { return nil, err }
+//	    return resp.Result, nil
+//	}
 //
-//	provider, err := azurekv.New(ctx, client,
+//	cred, err := azidentity.NewDefaultAzureCredential(nil) // handle error
+//	kv, err := azkeys.NewClient("https://my-vault.vault.azure.net/", cred, nil) // handle error
+//	provider, err := azurekv.New(ctx, &myAzureClient{kv},
 //	    azurekv.WithWrappedKey(wrappedKeyBytes, "key-1", "my-key-name", "key-version"),
 //	)
 package azurekv
@@ -18,13 +23,25 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/Azure/azure-sdk-for-go/sdk/security/keyvault/azkeys"
 	crypto "github.com/rbaliyan/config-crypto"
 )
 
-// Client is the subset of the Azure Key Vault API used by this provider.
+// Algorithm constants for the Key Vault UnwrapKey operation.
+// These correspond to the Azure Key Vault EncryptionAlgorithm values.
+const (
+	AlgorithmRSAOAEP256 = "RSA-OAEP-256"
+	AlgorithmRSAOAEP    = "RSA-OAEP"
+	AlgorithmRSA15      = "RSA1_5"
+)
+
+// Client unwraps an AES-256 data key that was wrapped by Azure Key Vault.
+// Implement this interface by calling the Key Vault UnwrapKey API with your
+// SDK of choice. See the package-level doc for a wiring example using
+// azure-sdk-for-go.
 type Client interface {
-	UnwrapKey(ctx context.Context, keyName string, keyVersion string, parameters azkeys.KeyOperationParameters, options *azkeys.UnwrapKeyOptions) (azkeys.UnwrapKeyResponse, error)
+	// UnwrapKey unwraps a data key that was wrapped by the specified Key Vault key.
+	// algorithm is the wrapping algorithm (e.g. AlgorithmRSAOAEP256).
+	UnwrapKey(ctx context.Context, keyName, keyVersion, algorithm string, ciphertext []byte) (plaintext []byte, err error)
 }
 
 // Option configures a Provider.
@@ -39,13 +56,13 @@ type wrappedKeyEntry struct {
 	id         string
 	keyName    string
 	keyVersion string
-	algorithm  azkeys.EncryptionAlgorithm
+	algorithm  string
 }
 
 // WithWrappedKey adds a wrapped key to be unwrapped via Key Vault.
 // The keyName and keyVersion identify the Key Vault key used for wrapping.
 // The id identifies this key in the config-crypto system.
-// Uses RSA-OAEP-256 by default.
+// Uses AlgorithmRSAOAEP256 by default.
 // The first key added becomes the current key for new encryptions.
 func WithWrappedKey(ciphertext []byte, id, keyName, keyVersion string) Option {
 	return func(o *options) {
@@ -54,20 +71,21 @@ func WithWrappedKey(ciphertext []byte, id, keyName, keyVersion string) Option {
 			id:         id,
 			keyName:    keyName,
 			keyVersion: keyVersion,
-			algorithm:  azkeys.EncryptionAlgorithmRSAOAEP256,
+			algorithm:  AlgorithmRSAOAEP256,
 		})
 	}
 }
 
-// WithWrappedKeyAlgorithm is like WithWrappedKey but allows specifying the unwrap algorithm.
-func WithWrappedKeyAlgorithm(ciphertext []byte, id, keyName, keyVersion string, alg azkeys.EncryptionAlgorithm) Option {
+// WithWrappedKeyAlgorithm is like WithWrappedKey but allows specifying the
+// unwrap algorithm (e.g. AlgorithmRSAOAEP or AlgorithmRSA15).
+func WithWrappedKeyAlgorithm(ciphertext []byte, id, keyName, keyVersion, algorithm string) Option {
 	return func(o *options) {
 		o.wrappedKeys = append(o.wrappedKeys, wrappedKeyEntry{
 			ciphertext: ciphertext,
 			id:         id,
 			keyName:    keyName,
 			keyVersion: keyVersion,
-			algorithm:  alg,
+			algorithm:  algorithm,
 		})
 	}
 }
@@ -81,6 +99,10 @@ func WithWrappedKeyAlgorithm(ciphertext []byte, id, keyName, keyVersion string, 
 // Keys are unwrapped during construction and cached. The Key Vault client is
 // not retained after construction.
 func New(ctx context.Context, client Client, opts ...Option) (crypto.Provider, error) {
+	if client == nil {
+		return nil, fmt.Errorf("azurekv: Client must not be nil")
+	}
+
 	var o options
 	for _, opt := range opts {
 		opt(&o)
@@ -101,17 +123,14 @@ func New(ctx context.Context, client Client, opts ...Option) (crypto.Provider, e
 		}
 	}()
 	for _, wk := range o.wrappedKeys {
-		resp, err := client.UnwrapKey(ctx, wk.keyName, wk.keyVersion, azkeys.KeyOperationParameters{
-			Algorithm: &wk.algorithm,
-			Value:     wk.ciphertext,
-		}, nil)
+		plaintext, err := client.UnwrapKey(ctx, wk.keyName, wk.keyVersion, wk.algorithm, wk.ciphertext)
 		if err != nil {
 			return nil, fmt.Errorf("azurekv: failed to unwrap key %q: %w", wk.id, err)
 		}
-		if len(resp.Result) != 32 {
-			return nil, fmt.Errorf("azurekv: unwrapped key %q is %d bytes, want 32", wk.id, len(resp.Result))
+		if len(plaintext) != 32 {
+			return nil, fmt.Errorf("azurekv: unwrapped key %q is %d bytes, want 32", wk.id, len(plaintext))
 		}
-		keys = append(keys, decryptedKey{bytes: resp.Result, id: wk.id})
+		keys = append(keys, decryptedKey{bytes: plaintext, id: wk.id})
 	}
 
 	var providerOpts []crypto.Option
