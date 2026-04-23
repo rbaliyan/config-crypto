@@ -6,10 +6,10 @@ import (
 	"testing"
 	"time"
 
+	crypto "github.com/rbaliyan/config-crypto"
 	"github.com/rbaliyan/config/codec"
 	_ "github.com/rbaliyan/config/codec/json"
 	"github.com/rbaliyan/config/memory"
-	crypto "github.com/rbaliyan/config-crypto"
 )
 
 func mustKey(t *testing.T) []byte {
