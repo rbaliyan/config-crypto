@@ -189,7 +189,10 @@ func (c *myAWSClient) Decrypt(ctx context.Context, keyID string, ciphertext []by
 
 cfg, _ := awsconfig.LoadDefaultConfig(ctx)
 provider, _ := awskms.New(ctx, &myAWSClient{sdk: kms.NewFromConfig(cfg)},
-    awskms.WithEncryptedKey(encryptedKeyBytes, "key-1", "arn:aws:kms:..."),
+    // Let KMS derive the key ID from the ciphertext context.
+    awskms.WithEncryptedKey(encryptedKeyBytes, "key-1"),
+    // ...or pin a specific KMS key ARN / alias:
+    // awskms.WithEncryptedKeyForKMSKey(encryptedKeyBytes, "key-1", "arn:aws:kms:..."),
 )
 defer provider.Close()
 encJSON, _ := crypto.NewCodec(codec.Default(), provider)
@@ -280,7 +283,65 @@ defer provider.Close()
 
 Suited for non-server deployments where keys are distributed as GPG-encrypted files alongside the application.
 
-All KMS providers decrypt their key material at construction time, copy it into a local ring provider, and discard the client. For live rotation without restart, use `vault.Poll` or call `ring.AddKey`/`ring.SetCurrentKey` manually when new key material is available.
+All KMS providers decrypt their key material at construction time, copy it into a local ring provider, and discard the client. For live rotation without restart, use the generic `crypto.Poll` helper with the provider-specific `NewPoller` (`awskms.NewPoller`, `gcpkms.NewPoller`, `azurekv.NewPoller`), use `vault.Poll` for HashiCorp Vault, or call `ring.AddKey`/`ring.SetCurrentKey` manually when new key material is available.
+
+## Background Key Rotation
+
+Two helpers drive runtime key rotation without restarting the process:
+
+- **`crypto.Poll`** is a generic helper that periodically invokes a user-supplied `FetchFn` to discover new key versions and promote the current key. `FetchFn` returns a slice of `crypto.KeyVersion` (`ID`, `Bytes`, `Rank`, `IsCurrent`); versions already in the ring are skipped. The initial fetch is fail-fast; per-version failures are retried up to `WithPollMaxRetries` (default 5) and then permanently skipped for the lifetime of the goroutine.
+
+- **`vault.Poll`** is a thin specialisation for the Vault KV v2 engine — it sources key versions directly from `client.KVMetadata` / `client.KVGet` without requiring the caller to write a `FetchFn`.
+
+The AWS, GCP, and Azure provider packages ship a `NewPoller(...)` helper that returns a `crypto.FetchFn`. Pair it with `crypto.Poll`:
+
+```go
+import (
+    crypto "github.com/rbaliyan/config-crypto"
+    "github.com/rbaliyan/config-crypto/awskms"
+)
+
+ring, _ := awskms.New(ctx, kmsClient,
+    awskms.WithEncryptedKey(v1Ciphertext, "key-v1"),
+)
+
+// Build a FetchFn from ListKeyVersions + pre-encrypted ciphertexts.
+fetch := awskms.NewPoller(listingClient, "arn:aws:kms:...", []awskms.KeyMaterialEntry{
+    {VersionID: "abc-1", Ciphertext: v1Ciphertext, ID: "key-v1", Rank: 1},
+    {VersionID: "abc-2", Ciphertext: v2Ciphertext, ID: "key-v2", Rank: 2},
+})
+
+stop, _ := crypto.Poll(ctx, ring, 30*time.Second, fetch,
+    crypto.WithPollErrorHandler(func(err error) { log.Println(err) }),
+)
+defer stop()
+```
+
+## Automated Re-encryption (rotation)
+
+After the current key changes, existing ciphertext remains readable by any ring that still holds the older key (the key ID is embedded in the header), but it is not silently re-encrypted with the new key. The optional `rotation` sub-package drives that migration in the background:
+
+```go
+import "github.com/rbaliyan/config-crypto/rotation"
+
+orch, _ := rotation.NewOrchestrator(ring, store, encJSON,
+    rotation.WithNamespaces("production", "staging"),
+    rotation.WithScanInterval(1*time.Hour),
+    rotation.WithConcurrency(4),
+    rotation.WithErrorHandler(func(ns, key string, err error) {
+        log.Printf("re-encrypt %s/%s: %v", ns, key, err)
+    }),
+)
+
+// Start the background scan loop.
+stop, _ := orch.Start(ctx)
+defer stop()
+
+// Or trigger a single pass over a namespace synchronously.
+n, _ := orch.ReencryptNamespace(ctx, "production")
+```
+
+Each scan lists values in each configured namespace, filters to those whose codec starts with `encrypted:`, and asks the ring (`NeedsReencryption`) whether the ciphertext was written with an older key rank. Stale values are decrypted and re-encrypted with the current key, then written back via `store.Set`. `Start` may only be called once per `Orchestrator`; the returned stop function cancels the scan loop and blocks until the goroutine exits.
 
 ## HealthCheck
 
@@ -311,4 +372,4 @@ Key material is defensively copied and zeroed when the Provider is closed (via `
 
 ## Known Gaps
 
-- **Automatic key rotation outside the Vault KV provider.** The Vault KV provider has a standalone `vault.Poll` helper for background rotation. The AWS/GCP/Azure/GPG providers do not — callers who want rotation for those backends must build a new Provider periodically and swap it, or obtain a `KeyRingProvider` via `NewKeyRingProvider` and drive `AddKey`/`SetCurrentKey` themselves. A follow-up may add parity.
+- **GPG provider has no background poller.** `awskms`, `gcpkms`, `azurekv`, and `vault` all offer a poll helper that plugs into `crypto.Poll`; the GPG provider does not (it is designed for file-based key distribution). Callers who want live rotation with GPG must obtain a `KeyRingProvider` via `NewKeyRingProvider` and drive `AddKey` / `SetCurrentKey` themselves when new key files arrive.

@@ -29,6 +29,9 @@ var (
 
 	// ErrNoProviderForNamespace is returned when a namespace has no registered provider and no fallback is set.
 	ErrNoProviderForNamespace = errors.New("crypto: no key provider for namespace")
+
+	// ErrDuplicateKeyID is returned from AddKey when the key ID is already present in the ring.
+	ErrDuplicateKeyID = errors.New("crypto: duplicate key ID")
 )
 
 // IsKeyNotFound returns true if the error is or wraps ErrKeyNotFound.
@@ -74,4 +77,9 @@ func IsRemoveCurrentKey(err error) bool {
 // IsNoProviderForNamespace returns true if the error is or wraps ErrNoProviderForNamespace.
 func IsNoProviderForNamespace(err error) bool {
 	return errors.Is(err, ErrNoProviderForNamespace)
+}
+
+// IsDuplicateKeyID returns true if the error is or wraps ErrDuplicateKeyID.
+func IsDuplicateKeyID(err error) bool {
+	return errors.Is(err, ErrDuplicateKeyID)
 }

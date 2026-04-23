@@ -178,8 +178,8 @@ func TestNew_DuplicateKeyID(t *testing.T) {
 		WithEncryptedKey([]byte("enc:a"), "same-id"),
 		WithEncryptedKey([]byte("enc:b"), "same-id"),
 	)
-	if err == nil || !crypto.IsInvalidKeyID(err) {
-		t.Errorf("expected ErrInvalidKeyID, got %v", err)
+	if err == nil || !crypto.IsDuplicateKeyID(err) {
+		t.Errorf("expected ErrDuplicateKeyID, got %v", err)
 	}
 }
 
