@@ -215,8 +215,8 @@ func TestKeyRingProvider_AddKeyValidation(t *testing.T) {
 		t.Errorf("AddKey empty id: got %v, want ErrInvalidKeyID", err)
 	}
 	// Duplicate ID must be rejected.
-	if err := rp.AddKey(makeKey(32), "v1", 0); !errors.Is(err, ErrInvalidKeyID) {
-		t.Errorf("AddKey duplicate id: got %v, want ErrInvalidKeyID", err)
+	if err := rp.AddKey(makeKey(32), "v1", 0); !errors.Is(err, ErrDuplicateKeyID) {
+		t.Errorf("AddKey duplicate id: got %v, want ErrDuplicateKeyID", err)
 	}
 }
 

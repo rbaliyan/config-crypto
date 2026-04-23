@@ -168,7 +168,7 @@ func (p *keyRingProvider) AddKey(keyBytes []byte, id string, rank uint64) error 
 		return ErrProviderClosed
 	}
 	if _, exists := p.keys[id]; exists {
-		return fmt.Errorf("%w: duplicate key ID %q", ErrInvalidKeyID, id)
+		return fmt.Errorf("%w: %q", ErrDuplicateKeyID, id)
 	}
 	p.keys[id] = keyEntry{id: id, bytes: b, generation: rank}
 	return nil

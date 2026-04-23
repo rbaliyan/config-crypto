@@ -1,3 +1,28 @@
+// Package crypto provides an encryption codec for the rbaliyan/config
+// library. It implements AES-256-GCM envelope encryption: each config
+// value is encrypted with a freshly generated Data Encryption Key (DEK)
+// that is itself wrapped by a Key Encryption Key (KEK) held by a
+// pluggable Provider.
+//
+// The package is organised around four building blocks:
+//
+//   - Codec wraps an inner codec (json, yaml, toml, …) with transparent
+//     encryption. Register the codec with config's codec registry and
+//     configuration values are encrypted on Set and decrypted on Get.
+//   - Provider abstracts KEK ownership. Built-ins: NewProvider (static
+//     single-key), NewKeyRingProvider (multi-key with live rotation),
+//     plus KMS-backed providers in the awskms, gcpkms, azurekv, vault,
+//     and gpg sub-packages.
+//   - NamespaceSelector routes Encrypt/Decrypt to different providers
+//     based on the config namespace — useful for multi-tenant deployments
+//     where each tenant holds its own KEK.
+//   - Poll drives backend-agnostic runtime key rotation against any
+//     KeyRingProvider. The AWS/GCP/Azure sub-packages ship a
+//     NewPoller helper that returns a FetchFn ready to hand to Poll;
+//     the vault sub-package has its own vault.Poll specialisation.
+//
+// For re-encrypting at-rest ciphertext after the current KEK changes,
+// see the rotation sub-package.
 package crypto
 
 import (
