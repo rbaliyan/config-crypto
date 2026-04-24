@@ -94,7 +94,7 @@ A golden byte-vector test (`TestDecryptV1GoldenVector` + `TestGoldenV1Drift` in 
 | File | Contents |
 |------|----------|
 | `crypto.go` | `Codec` struct implementing `codec.Codec` + `codec.Transformer`; wraps inner codec; threads ctx to Provider |
-| `provider.go` | `Provider` interface (Name/Connect/Encrypt/Decrypt/HealthCheck/Close), `NewProvider`, unexported `staticProvider` |
+| `provider.go` | `Provider` interface (Name/Connect/Encrypt/Decrypt/HealthCheck/Close); `NewProvider` delegates to `keyRingProvider` with rotation methods hidden |
 | `keyring_provider.go` | `KeyRingProvider` interface (embeds Provider + AddKey/SetCurrentKey/RemoveKey/CurrentKeyID/NeedsReencryption), `NewKeyRingProvider`, unexported `keyRingProvider` struct |
 | `namespace_provider.go` | `NamespaceSelector`, `WithNamespaceProvider`, `WithFallbackProvider`, `ForNamespace`, `AddProvider`, `RemoveProvider`, `RemoveAndClose`, `Close` |
 | `encrypt.go` | `encryptEnvelope` — generates DEK, encrypts data, wraps DEK with KEK, zeroes DEK, writes v2 header |

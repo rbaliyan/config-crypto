@@ -190,6 +190,9 @@ func (o *Orchestrator) ReencryptNamespace(ctx context.Context, namespace string)
 		if cursor == "" {
 			break
 		}
+		if err := ctx.Err(); err != nil {
+			return 0, err
+		}
 	}
 
 	if len(stale) == 0 {
@@ -214,7 +217,7 @@ func (o *Orchestrator) ReencryptNamespace(ctx context.Context, namespace string)
 		nWorkers = len(stale)
 	}
 
-	for i := 0; i < nWorkers; i++ {
+	for range nWorkers {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()

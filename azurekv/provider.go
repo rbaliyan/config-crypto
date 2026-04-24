@@ -24,6 +24,7 @@ import (
 	"fmt"
 
 	crypto "github.com/rbaliyan/config-crypto"
+	"github.com/rbaliyan/config-crypto/internal/kmsring"
 )
 
 // Algorithm constants for the Key Vault UnwrapKey operation.
@@ -108,39 +109,9 @@ func New(ctx context.Context, client Client, opts ...Option) (crypto.KeyRingProv
 		opt(&o)
 	}
 
-	if len(o.wrappedKeys) == 0 {
-		return nil, fmt.Errorf("azurekv: at least one wrapped key is required")
-	}
-
-	type decryptedKey struct {
-		bytes []byte
-		id    string
-	}
-	keys := make([]decryptedKey, 0, len(o.wrappedKeys))
-	defer func() {
-		for _, k := range keys {
-			clear(k.bytes)
-		}
-	}()
-	for _, wk := range o.wrappedKeys {
-		plaintext, err := client.UnwrapKey(ctx, wk.keyName, wk.keyVersion, wk.algorithm, wk.ciphertext)
-		if err != nil {
-			return nil, fmt.Errorf("azurekv: failed to unwrap key %q: %w", wk.id, err)
-		}
-		if len(plaintext) != 32 {
-			return nil, fmt.Errorf("azurekv: unwrapped key %q is %d bytes, want 32", wk.id, len(plaintext))
-		}
-		keys = append(keys, decryptedKey{bytes: plaintext, id: wk.id})
-	}
-
-	ring, err := crypto.NewKeyRingProvider(keys[0].bytes, keys[0].id, 0)
-	if err != nil {
-		return nil, fmt.Errorf("azurekv: %w", err)
-	}
-	for _, k := range keys[1:] {
-		if err := ring.AddKey(k.bytes, k.id, 0); err != nil {
-			return nil, fmt.Errorf("azurekv: %w", err)
-		}
-	}
-	return ring, nil
+	return kmsring.Build(len(o.wrappedKeys), "azurekv", func(i int) ([]byte, string, error) {
+		wk := o.wrappedKeys[i]
+		pt, err := client.UnwrapKey(ctx, wk.keyName, wk.keyVersion, wk.algorithm, wk.ciphertext)
+		return pt, wk.id, err
+	})
 }
