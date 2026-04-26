@@ -44,12 +44,21 @@ type KeyRingProvider interface {
 	NeedsReencryption(ciphertext []byte) (bool, error)
 }
 
-// keyRingProvider is the concrete implementation of KeyRingProvider.
+// keyEntry holds key material for one entry in a keyRingProvider.
+type keyEntry struct {
+	bytes []byte
+	rank  uint64 // monotonically increasing; higher means newer
+}
+
+// keyRingProvider is the concrete implementation of KeyRingProvider. Each
+// key is stored exactly once in keys; currentID names the entry used for
+// new encryptions. Single-copy storage keeps Close's zeroing trivially
+// correct: no aliasing, no double-clear.
 type keyRingProvider struct {
-	mu      sync.RWMutex
-	current keyEntry
-	keys    map[string]keyEntry
-	closed  bool
+	mu        sync.RWMutex
+	currentID string
+	keys      map[string]keyEntry
+	closed    bool
 }
 
 // Compile-time interface check.
@@ -72,18 +81,13 @@ func NewKeyRingProvider(initialBytes []byte, id string, rank uint64) (KeyRingPro
 
 	b := make([]byte, aesKeySize)
 	copy(b, initialBytes)
-	current := keyEntry{id: id, bytes: b, generation: rank}
 
-	// Separate copy for the lookup map so that Close() zeroing the map entry
-	// and zeroing current.bytes do not alias the same backing array.
-	kb := make([]byte, aesKeySize)
-	copy(kb, b)
 	keys := make(map[string]keyEntry, 1)
-	keys[id] = keyEntry{id: id, bytes: kb, generation: rank}
+	keys[id] = keyEntry{bytes: b, rank: rank}
 
 	return &keyRingProvider{
-		current: current,
-		keys:    keys,
+		currentID: id,
+		keys:      keys,
 	}, nil
 }
 
@@ -91,7 +95,7 @@ func NewKeyRingProvider(initialBytes []byte, id string, rank uint64) (KeyRingPro
 func (p *keyRingProvider) Name() string {
 	p.mu.RLock()
 	defer p.mu.RUnlock()
-	return p.current.id
+	return p.currentID
 }
 
 // Connect is a no-op for keyRingProvider.
@@ -104,7 +108,11 @@ func (p *keyRingProvider) Encrypt(_ context.Context, plaintext []byte) ([]byte, 
 	if p.closed {
 		return nil, ErrProviderClosed
 	}
-	return encryptEnvelope(plaintext, p.current.id, p.current.bytes)
+	cur, ok := p.keys[p.currentID]
+	if !ok {
+		return nil, fmt.Errorf("%w: current %q", ErrKeyNotFound, p.currentID)
+	}
+	return encryptEnvelope(plaintext, p.currentID, cur.bytes)
 }
 
 // Decrypt decrypts ciphertext using the key identified in the header.
@@ -138,9 +146,8 @@ func (p *keyRingProvider) Close() error {
 	for _, k := range p.keys {
 		clear(k.bytes)
 	}
-	clear(p.current.bytes)
-	p.current = keyEntry{}
 	p.keys = nil
+	p.currentID = ""
 	p.closed = true
 	return nil
 }
@@ -149,7 +156,7 @@ func (p *keyRingProvider) Close() error {
 // The keyBytes must be 32 bytes for AES-256 and id must not be empty.
 // rank is the KV store version number for this key; it is used by
 // NeedsReencryption to establish ordering across restarts.
-// Returns ErrInvalidKeyID if the ID already exists.
+// Returns ErrDuplicateKeyID if the ID already exists.
 // Key bytes are copied internally.
 func (p *keyRingProvider) AddKey(keyBytes []byte, id string, rank uint64) error {
 	if len(keyBytes) != aesKeySize {
@@ -165,12 +172,14 @@ func (p *keyRingProvider) AddKey(keyBytes []byte, id string, rank uint64) error 
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	if p.closed {
+		clear(b)
 		return ErrProviderClosed
 	}
 	if _, exists := p.keys[id]; exists {
+		clear(b)
 		return fmt.Errorf("%w: %q", ErrDuplicateKeyID, id)
 	}
-	p.keys[id] = keyEntry{id: id, bytes: b, generation: rank}
+	p.keys[id] = keyEntry{bytes: b, rank: rank}
 	return nil
 }
 
@@ -182,15 +191,10 @@ func (p *keyRingProvider) SetCurrentKey(id string) error {
 	if p.closed {
 		return ErrProviderClosed
 	}
-
-	k, ok := p.keys[id]
-	if !ok {
+	if _, ok := p.keys[id]; !ok {
 		return fmt.Errorf("%w: %s", ErrKeyNotFound, id)
 	}
-	// Copy so current and keys[id] don't share backing array.
-	cb := make([]byte, len(k.bytes))
-	copy(cb, k.bytes)
-	p.current = keyEntry{id: k.id, bytes: cb, generation: k.generation}
+	p.currentID = id
 	return nil
 }
 
@@ -201,11 +205,9 @@ func (p *keyRingProvider) RemoveKey(id string) error {
 	if p.closed {
 		return ErrProviderClosed
 	}
-
-	if p.current.id == id {
+	if p.currentID == id {
 		return fmt.Errorf("%w: %s", ErrRemoveCurrentKey, id)
 	}
-
 	k, ok := p.keys[id]
 	if !ok {
 		return fmt.Errorf("%w: %s", ErrKeyNotFound, id)
@@ -219,7 +221,7 @@ func (p *keyRingProvider) RemoveKey(id string) error {
 func (p *keyRingProvider) CurrentKeyID() string {
 	p.mu.RLock()
 	defer p.mu.RUnlock()
-	return p.current.id
+	return p.currentID
 }
 
 // NeedsReencryption reports whether ciphertext was encrypted with a key that
@@ -234,16 +236,19 @@ func (p *keyRingProvider) NeedsReencryption(ciphertext []byte) (bool, error) {
 	p.mu.RLock()
 	defer p.mu.RUnlock()
 
-	if h.keyID == p.current.id {
+	if h.keyID == p.currentID {
 		return false, nil
 	}
 
-	k, ok := p.keys[h.keyID]
+	stored, ok := p.keys[h.keyID]
 	if !ok {
 		return false, nil
 	}
-
-	return k.generation < p.current.generation, nil
+	current, ok := p.keys[p.currentID]
+	if !ok {
+		return false, nil
+	}
+	return stored.rank < current.rank, nil
 }
 
 // keyByID returns a copy of key bytes for the given ID. Caller must hold at least a read lock.

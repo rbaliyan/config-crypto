@@ -22,6 +22,7 @@ import (
 	"fmt"
 
 	crypto "github.com/rbaliyan/config-crypto"
+	"github.com/rbaliyan/config-crypto/internal/kmsring"
 )
 
 // Client unwraps an AES-256 data key that was encrypted by Google Cloud KMS.
@@ -81,39 +82,9 @@ func New(ctx context.Context, client Client, opts ...Option) (crypto.KeyRingProv
 		opt(&o)
 	}
 
-	if len(o.encryptedKeys) == 0 {
-		return nil, fmt.Errorf("gcpkms: at least one encrypted key is required")
-	}
-
-	type decryptedKey struct {
-		bytes []byte
-		id    string
-	}
-	keys := make([]decryptedKey, 0, len(o.encryptedKeys))
-	defer func() {
-		for _, k := range keys {
-			clear(k.bytes)
-		}
-	}()
-	for _, ek := range o.encryptedKeys {
-		plaintext, err := client.Decrypt(ctx, ek.resourceName, ek.ciphertext)
-		if err != nil {
-			return nil, fmt.Errorf("gcpkms: failed to decrypt key %q: %w", ek.id, err)
-		}
-		if len(plaintext) != 32 {
-			return nil, fmt.Errorf("gcpkms: decrypted key %q is %d bytes, want 32", ek.id, len(plaintext))
-		}
-		keys = append(keys, decryptedKey{bytes: plaintext, id: ek.id})
-	}
-
-	ring, err := crypto.NewKeyRingProvider(keys[0].bytes, keys[0].id, 0)
-	if err != nil {
-		return nil, fmt.Errorf("gcpkms: %w", err)
-	}
-	for _, k := range keys[1:] {
-		if err := ring.AddKey(k.bytes, k.id, 0); err != nil {
-			return nil, fmt.Errorf("gcpkms: %w", err)
-		}
-	}
-	return ring, nil
+	return kmsring.Build(len(o.encryptedKeys), "gcpkms", func(i int) ([]byte, string, error) {
+		ek := o.encryptedKeys[i]
+		pt, err := client.Decrypt(ctx, ek.resourceName, ek.ciphertext)
+		return pt, ek.id, err
+	})
 }

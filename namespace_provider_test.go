@@ -272,7 +272,7 @@ func TestScopedProvider_NameAndConnect(t *testing.T) {
 		t.Errorf("Name() = %q, want %q", got, "namespace:prod")
 	}
 
-	// Connect delegates to the underlying provider (no-op for staticProvider).
+	// Connect delegates to the underlying provider (no-op for in-memory providers).
 	if err := scoped.Connect(ctx); err != nil {
 		t.Errorf("Connect: %v", err)
 	}
