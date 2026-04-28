@@ -91,6 +91,12 @@ func Poll(ctx context.Context, ring KeyRingProvider, interval time.Duration, fet
 	if err != nil {
 		return nil, fmt.Errorf("crypto: Poll initial fetch: %w", err)
 	}
+	// Zero all key material from fetchFn once we are done with this slice.
+	defer func() {
+		for i := range versions {
+			clear(versions[i].Bytes)
+		}
+	}()
 
 	// Sort by rank ascending so older versions are added before newer ones.
 	sort.Slice(versions, func(i, j int) bool { return versions[i].Rank < versions[j].Rank })
@@ -212,12 +218,21 @@ func runPoll(ctx context.Context, ring KeyRingProvider, fetchFn FetchFn, known, 
 		if newCurrentID != "" && newCurrentID != lastCurrentID {
 			if err := ring.SetCurrentKey(newCurrentID); err != nil {
 				if IsProviderClosed(err) {
+					// Zero before returning.
+					for i := range versions {
+						clear(versions[i].Bytes)
+					}
 					return
 				}
 				reportPollErr(o, fmt.Errorf("poll: promote current key to %q: %w", newCurrentID, err))
-				continue
+			} else {
+				lastCurrentID = newCurrentID
 			}
-			lastCurrentID = newCurrentID
+		}
+
+		// Zero key material from fetchFn — all uses within this tick are done.
+		for i := range versions {
+			clear(versions[i].Bytes)
 		}
 	}
 }

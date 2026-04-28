@@ -252,6 +252,7 @@ func (o *Orchestrator) reencryptKey(ctx context.Context, namespace, key string, 
 	if err != nil {
 		return fmt.Errorf("decrypt: %w", err)
 	}
+	defer clear(plaintext)
 
 	newRaw, err := o.codec.Transform(ctx, plaintext)
 	if err != nil {
