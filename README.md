@@ -162,6 +162,44 @@ codecB, _ := crypto.NewCodec(codec.Default(), sel.ForNamespace("tenant-b"))
 
 `AddProvider` / `RemoveProvider` / `RemoveAndClose` manage registrations at runtime.
 
+## Encrypted Cache
+
+`EncryptedCache` wraps any `config.Cache` (Redis, in-memory, …) so that cached values are stored as authenticated ciphertext. The full payload — data bytes, codec name, config type, entry ID, and metadata — is encrypted by the supplied Provider before the entry reaches the backing store. Only `ExpiresAt` is forwarded to the outer wrapper so the inner cache (e.g. Redis) can enforce TTL-based eviction without decrypting.
+
+```go
+import (
+    crypto "github.com/rbaliyan/config-crypto"
+    configredis "github.com/rbaliyan/config/redis"
+)
+
+provider, _ := crypto.NewProvider(keyBytes, "cache-key-v1")
+
+encCache, _ := crypto.NewEncryptedCache(
+    configredis.NewCache(rdb, configredis.WithCacheTTL(5*time.Minute)),
+    provider,
+)
+
+mgr, _ := config.New(
+    config.WithStore(remoteStore),
+    config.WithCache(encCache),
+)
+```
+
+**Key rotation**: when the Provider's active key changes, previously cached ciphertext cannot be decrypted. Those entries are returned as `config.ErrNotFound`, causing the manager to re-fetch from the backing store and re-cache with the new key. No operator intervention is required — the cache re-warms transparently on the next access.
+
+**Error handling**: cryptographic failures (wrong key, tampered ciphertext, unknown schema version) are treated as cache misses so the application keeps running. Provider operational failures (e.g. `ErrProviderClosed`) are propagated as real errors and not silently swallowed.
+
+**Namespace-aware encryption**: combine with `NamespaceSelector` to use different keys per namespace:
+
+```go
+sel, _ := crypto.NewNamespaceSelector(
+    crypto.WithNamespaceProvider("tenant-a", providerA),
+    crypto.WithNamespaceProvider("tenant-b", providerB),
+    crypto.WithFallbackProvider(defaultProvider),
+)
+encCache, _ := crypto.NewEncryptedCache(innerCache, sel)
+```
+
 ## KMS Providers
 
 All KMS providers are packages within the `github.com/rbaliyan/config-crypto` module — a single `go get github.com/rbaliyan/config-crypto` imports them all. Each provider returns a `crypto.KeyRingProvider`; internally it fetches key material from the backend and constructs a ring provider.

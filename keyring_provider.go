@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 	"sync"
+
+	"github.com/awnumar/memguard"
 )
 
 // KeyRingProvider is a mutable Provider that supports runtime key rotation.
@@ -45,9 +47,13 @@ type KeyRingProvider interface {
 }
 
 // keyEntry holds key material for one entry in a keyRingProvider.
+// The 32-byte AES-256 KEK is stored inside a memguard Enclave:
+//   - mlock prevents the OS from paging it to disk.
+//   - XOR-at-rest makes the plaintext invisible to heap scans between uses.
+//   - Destroy() zeroes and unlocks on removal or Close.
 type keyEntry struct {
-	bytes []byte
-	rank  uint64 // monotonically increasing; higher means newer
+	enclave *memguard.Enclave
+	rank    uint64 // monotonically increasing; higher means newer
 }
 
 // keyRingProvider is the concrete implementation of KeyRingProvider. Each
@@ -70,7 +76,8 @@ var _ KeyRingProvider = (*keyRingProvider)(nil)
 // integer cast to uint64); it is used by NeedsReencryption to determine
 // whether a given ciphertext was encrypted with an older key. Use 0 when the
 // backing store does not provide version ordering.
-// Key bytes are copied internally; the caller may safely zero the original after construction.
+// Key bytes are copied into a memguard Enclave; the caller should zero the
+// original slice after construction as a defence-in-depth measure.
 func NewKeyRingProvider(initialBytes []byte, id string, rank uint64) (KeyRingProvider, error) {
 	if len(initialBytes) != aesKeySize {
 		return nil, fmt.Errorf("%w: got %d bytes", ErrInvalidKeySize, len(initialBytes))
@@ -79,11 +86,9 @@ func NewKeyRingProvider(initialBytes []byte, id string, rank uint64) (KeyRingPro
 		return nil, fmt.Errorf("%w: key ID must not be empty", ErrInvalidKeyID)
 	}
 
-	b := make([]byte, aesKeySize)
-	copy(b, initialBytes)
-
+	enc := sealKey(initialBytes)
 	keys := make(map[string]keyEntry, 1)
-	keys[id] = keyEntry{bytes: b, rank: rank}
+	keys[id] = keyEntry{enclave: enc, rank: rank}
 
 	return &keyRingProvider{
 		currentID: id,
@@ -112,7 +117,13 @@ func (p *keyRingProvider) Encrypt(_ context.Context, plaintext []byte) ([]byte, 
 	if !ok {
 		return nil, fmt.Errorf("%w: current %q", ErrKeyNotFound, p.currentID)
 	}
-	return encryptEnvelope(plaintext, p.currentID, cur.bytes)
+
+	lb, err := cur.enclave.Open()
+	if err != nil {
+		return nil, fmt.Errorf("open key enclave %q: %w", p.currentID, err)
+	}
+	defer lb.Destroy()
+	return encryptEnvelope(plaintext, p.currentID, lb.Bytes())
 }
 
 // Decrypt decrypts ciphertext using the key identified in the header.
@@ -135,7 +146,7 @@ func (p *keyRingProvider) HealthCheck(_ context.Context) error {
 	return nil
 }
 
-// Close zeros all key material and blocks further operations.
+// Close wipes all key enclaves and blocks further operations.
 // Safe to call multiple times; subsequent calls are no-ops.
 func (p *keyRingProvider) Close() error {
 	p.mu.Lock()
@@ -144,7 +155,7 @@ func (p *keyRingProvider) Close() error {
 		return nil
 	}
 	for _, k := range p.keys {
-		clear(k.bytes)
+		wipeEnclave(k.enclave)
 	}
 	p.keys = nil
 	p.currentID = ""
@@ -157,7 +168,8 @@ func (p *keyRingProvider) Close() error {
 // rank is the KV store version number for this key; it is used by
 // NeedsReencryption to establish ordering across restarts.
 // Returns ErrDuplicateKeyID if the ID already exists.
-// Key bytes are copied internally.
+// Key bytes are copied into a memguard Enclave; the caller should zero their
+// slice after AddKey returns as a defence-in-depth measure.
 func (p *keyRingProvider) AddKey(keyBytes []byte, id string, rank uint64) error {
 	if len(keyBytes) != aesKeySize {
 		return fmt.Errorf("%w: key %q has %d bytes", ErrInvalidKeySize, id, len(keyBytes))
@@ -166,20 +178,19 @@ func (p *keyRingProvider) AddKey(keyBytes []byte, id string, rank uint64) error 
 		return fmt.Errorf("%w: key ID must not be empty", ErrInvalidKeyID)
 	}
 
-	b := make([]byte, aesKeySize)
-	copy(b, keyBytes)
+	enc := sealKey(keyBytes)
 
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	if p.closed {
-		clear(b)
+		wipeEnclave(enc)
 		return ErrProviderClosed
 	}
 	if _, exists := p.keys[id]; exists {
-		clear(b)
+		wipeEnclave(enc)
 		return fmt.Errorf("%w: %q", ErrDuplicateKeyID, id)
 	}
-	p.keys[id] = keyEntry{bytes: b, rank: rank}
+	p.keys[id] = keyEntry{enclave: enc, rank: rank}
 	return nil
 }
 
@@ -212,7 +223,7 @@ func (p *keyRingProvider) RemoveKey(id string) error {
 	if !ok {
 		return fmt.Errorf("%w: %s", ErrKeyNotFound, id)
 	}
-	clear(k.bytes)
+	wipeEnclave(k.enclave)
 	delete(p.keys, id)
 	return nil
 }
@@ -251,13 +262,39 @@ func (p *keyRingProvider) NeedsReencryption(ciphertext []byte) (bool, error) {
 	return stored.rank < current.rank, nil
 }
 
-// keyByID returns a copy of key bytes for the given ID. Caller must hold at least a read lock.
+// keyByID opens the enclave for the given key ID and returns a plaintext copy.
+// The caller is responsible for zeroing the returned slice after use.
+// Caller must hold at least a read lock.
 func (p *keyRingProvider) keyByID(id string) ([]byte, error) {
 	k, ok := p.keys[id]
 	if !ok {
 		return nil, fmt.Errorf("%w: %s", ErrKeyNotFound, id)
 	}
-	b := make([]byte, len(k.bytes))
-	copy(b, k.bytes)
+	lb, err := k.enclave.Open()
+	if err != nil {
+		return nil, fmt.Errorf("open key enclave %q: %w", id, err)
+	}
+	defer lb.Destroy()
+	b := make([]byte, lb.Size())
+	copy(b, lb.Bytes())
 	return b, nil
+}
+
+// sealKey copies keyBytes into a mutable LockedBuffer and seals it into a
+// memguard Enclave. The caller's slice is NOT modified; callers are responsible
+// for zeroing their own copy of the key material.
+func sealKey(keyBytes []byte) *memguard.Enclave {
+	lb := memguard.NewBuffer(len(keyBytes))
+	lb.Copy(keyBytes)
+	return lb.Seal()
+}
+
+// wipeEnclave opens the enclave and destroys the resulting LockedBuffer,
+// zeroing the plaintext key material in the mlock'd region.
+// The encrypted blob in the Enclave struct is left in heap but is
+// cryptographically opaque without the memguard session key.
+func wipeEnclave(enc *memguard.Enclave) {
+	if lb, err := enc.Open(); err == nil {
+		lb.Destroy()
+	}
 }

@@ -4,7 +4,7 @@
 // that is itself wrapped by a Key Encryption Key (KEK) held by a
 // pluggable Provider.
 //
-// The package is organised around four building blocks:
+// The package is organised around five building blocks:
 //
 //   - Codec wraps an inner codec (json, yaml, toml, …) with transparent
 //     encryption. Register the codec with config's codec registry and
@@ -20,6 +20,10 @@
 //     KeyRingProvider. The AWS/GCP/Azure sub-packages ship a
 //     NewPoller helper that returns a FetchFn ready to hand to Poll;
 //     the vault sub-package has its own vault.Poll specialisation.
+//   - EncryptedCache wraps any config.Cache (Redis, memory, …) so that
+//     cached values are stored as authenticated ciphertext. The full
+//     payload — data bytes, codec name, type, and metadata — is encrypted
+//     by the supplied Provider before the entry reaches the backing store.
 //
 // For re-encrypting at-rest ciphertext after the current KEK changes,
 // see the rotation sub-package.
