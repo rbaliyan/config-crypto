@@ -3,7 +3,9 @@ package crypto_test
 import (
 	"context"
 	"fmt"
+	"sync"
 
+	"github.com/rbaliyan/config"
 	crypto "github.com/rbaliyan/config-crypto"
 	"github.com/rbaliyan/config/codec"
 	jsoncodec "github.com/rbaliyan/config/codec/json"
@@ -72,6 +74,83 @@ func ExampleNewCodec_withConfig() {
 
 	// Output:
 	// Resolved: encrypted:json
+}
+
+// mapCache is a minimal config.Cache used in examples.
+type mapCache struct {
+	mu   sync.RWMutex
+	data map[string]config.Value
+}
+
+func newMapCache() *mapCache { return &mapCache{data: make(map[string]config.Value)} }
+
+func (m *mapCache) Set(_ context.Context, ns, key string, v config.Value) error {
+	m.mu.Lock()
+	m.data[ns+"/"+key] = v
+	m.mu.Unlock()
+	return nil
+}
+
+func (m *mapCache) Get(_ context.Context, ns, key string) (config.Value, error) {
+	m.mu.RLock()
+	v, ok := m.data[ns+"/"+key]
+	m.mu.RUnlock()
+	if !ok {
+		return nil, config.ErrNotFound
+	}
+	return v, nil
+}
+
+func (m *mapCache) Delete(_ context.Context, ns, key string) error {
+	m.mu.Lock()
+	delete(m.data, ns+"/"+key)
+	m.mu.Unlock()
+	return nil
+}
+
+func (m *mapCache) Stats() config.CacheStats { return config.CacheStats{} }
+
+func ExampleNewEncryptedCache() {
+	ctx := context.Background()
+
+	key := make([]byte, 32)
+	for i := range key {
+		key[i] = byte(i)
+	}
+
+	provider, err := crypto.NewProvider(key, "cache-key-v1")
+	if err != nil {
+		panic(err)
+	}
+	defer provider.Close()
+
+	inner := newMapCache()
+	encCache, err := crypto.NewEncryptedCache(inner, provider)
+	if err != nil {
+		panic(err)
+	}
+
+	// Store an encrypted value.
+	val := config.NewValue("my-secret", config.WithValueType(config.TypeString))
+	if err := encCache.Set(ctx, "prod", "db/password", val); err != nil {
+		panic(err)
+	}
+
+	// The inner cache holds ciphertext — not the original string.
+	raw, _ := inner.Get(ctx, "prod", "db/password")
+	fmt.Println("Inner codec:", raw.Codec())
+
+	// Retrieve and decrypt.
+	got, err := encCache.Get(ctx, "prod", "db/password")
+	if err != nil {
+		panic(err)
+	}
+	s, _ := got.String()
+	fmt.Println("Decrypted:", s)
+
+	// Output:
+	// Inner codec: crypto:cache
+	// Decrypted: my-secret
 }
 
 func ExampleNewKeyRingProvider_rotation() {

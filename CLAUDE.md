@@ -101,6 +101,7 @@ A golden byte-vector test (`TestDecryptV1GoldenVector` + `TestGoldenV1Drift` in 
 | `decrypt.go` | `decryptEnvelope` — reads v1 or v2 header via `readHeader`, unwraps DEK (via `keyLookupFunc`), decrypts data, zeroes DEK |
 | `format.go` | Binary format constants, `header` struct, `writeHeaderV2`, `readHeader`/`readHeaderV1`/`readHeaderV2` with defensive copies |
 | `errors.go` | Sentinel errors with `Is*()` helpers: `ErrKeyNotFound`, `ErrInvalidKeySize`, `ErrInvalidFormat`, `ErrUnsupportedFormat`, `ErrDecryptionFailed`, `ErrInvalidKeyID`, `ErrProviderClosed`, `ErrRemoveCurrentKey`, `ErrNoProviderForNamespace` |
+| `cache.go` | `EncryptedCache` — wraps any `config.Cache`; encrypts full value payload (data, codec, type, metadata) via Provider before storage; decrypts on retrieval; treats crypto failures as cache misses; propagates provider operational failures |
 | `benchmark_test.go` | Benchmarks for encode/decode at 1KB, 64KB, 1MB, and string payloads |
 
 ### KMS Provider Packages
