@@ -11,6 +11,8 @@ require (
 	go.opentelemetry.io/otel/trace v1.43.0
 )
 
+replace github.com/rbaliyan/config => ../config
+
 require (
 	github.com/AdaLogics/go-fuzz-headers v0.0.0-20230811130428-ced1acdcaa24 // indirect
 	github.com/awnumar/memcall v0.4.0 // indirect

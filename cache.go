@@ -2,6 +2,7 @@ package crypto
 
 import (
 	"context"
+	"crypto/rand"
 	"encoding/json"
 	"fmt"
 	"sync/atomic"
@@ -28,7 +29,7 @@ const entrySchemaVersion = 1
 
 // typeMax is the largest valid config.Type value. An entry whose Type field
 // falls outside [0, typeMax] was produced by a bug and is rejected as corrupt.
-const typeMax = int(config.TypeCustom)
+const typeMax = int(config.TypeSecret)
 
 // EncryptedCache wraps any config.Cache with transparent encryption using the
 // supplied Provider. The full value payload (data bytes, codec name, type, entry
@@ -133,6 +134,7 @@ func (c *EncryptedCache) Set(ctx context.Context, namespace, key string, value c
 	if err != nil {
 		return fmt.Errorf("encrypted cache set: encode entry: %w", err)
 	}
+	defer clear(plaintext)
 
 	ciphertext, err := c.p.Encrypt(ctx, plaintext)
 	if err != nil {
@@ -253,6 +255,42 @@ func (c *EncryptedCache) Get(ctx context.Context, namespace, key string) (config
 // Delete removes a cache entry from the inner cache.
 func (c *EncryptedCache) Delete(ctx context.Context, namespace, key string) error {
 	return c.inner.Delete(ctx, namespace, key)
+}
+
+// NewSessionCache returns an EncryptedCache backed by an in-memory LRU and a
+// fresh random AES-256-GCM key generated at call time. The key never leaves
+// process memory and is discarded on restart, so cached values cannot be read
+// by any other process or after a restart — even if they share the same backing
+// store.
+//
+// capacity is the maximum number of entries (0 uses the config default of 10000).
+//
+// This is the recommended in-process cache for services that handle secrets or
+// other sensitive configuration values. It provides at-rest protection in memory
+// without requiring an external key management system or Vault integration.
+//
+//	cache, err := crypto.NewSessionCache(0)  // unbounded LRU
+//	mgr, err := config.New(
+//	    config.WithStore(remoteStore),
+//	    config.WithCache(cache),
+//	)
+func NewSessionCache(capacity int) (*EncryptedCache, error) {
+	key := make([]byte, 32)
+	if _, err := rand.Read(key); err != nil {
+		return nil, fmt.Errorf("crypto: generate session cache key: %w", err)
+	}
+	p, err := NewProvider(key, "session-cache")
+	if err != nil {
+		return nil, fmt.Errorf("crypto: create session provider: %w", err)
+	}
+	if err := p.Connect(context.Background()); err != nil {
+		return nil, fmt.Errorf("crypto: connect session provider: %w", err)
+	}
+	inner, err := config.NewMemoryCache(capacity, 0)
+	if err != nil {
+		return nil, fmt.Errorf("crypto: create session cache backing store: %w", err)
+	}
+	return NewEncryptedCache(inner, p)
 }
 
 // Stats returns cache statistics. Hits and Misses reflect post-decryption
