@@ -23,8 +23,8 @@ github.com/hashicorp/golang-lru/v2 v2.0.7 h1:a+bsQ5rvGLjzHuww6tVxozPZFVghXaHOwFs
 github.com/hashicorp/golang-lru/v2 v2.0.7/go.mod h1:QeFd9opnmA6QUJc5vARoKUSoFhyfM2/ZepoAG6RGpeM=
 github.com/pmezard/go-difflib v1.0.0 h1:4DBwDE0NGyQoBHbLQYPwSUPoCMWR5BEzIk/f1lZbAQM=
 github.com/pmezard/go-difflib v1.0.0/go.mod h1:iKH77koFhYxTK1pcRnkKkqfTogsbg7gZNVY4sRDYZ/4=
-github.com/rbaliyan/config v0.7.2 h1:YbkWkAY6EPQqzBIqYwP2RDB42WZxA5TFHpBj7tdL0zo=
-github.com/rbaliyan/config v0.7.2/go.mod h1:T+6uZLGt7YjwBL0RHRJG95vOGEYhXrETAG3n9l8f+Fs=
+github.com/rbaliyan/config v0.8.0 h1:bZtfuqGx2Vd0s4/Rdo+L4R36H8Fd7MaBz1uuxGbuZKU=
+github.com/rbaliyan/config v0.8.0/go.mod h1:T+6uZLGt7YjwBL0RHRJG95vOGEYhXrETAG3n9l8f+Fs=
 github.com/stretchr/testify v1.11.1 h1:7s2iGBzp5EwR7/aIZr8ao5+dra3wiQyKjjFuvgVKu7U=
 github.com/stretchr/testify v1.11.1/go.mod h1:wZwfW3scLgRK+23gO65QZefKpKQRnfz6sD981Nm4B6U=
 go.mongodb.org/mongo-driver/v2 v2.6.0 h1:b9sJOYrkmt4l8bY43ZenFBcPlhYIjaOfYHLtbB/5qi8=
