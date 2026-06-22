@@ -56,6 +56,14 @@ test-all:
 smoke:
     go test -run '^TestSmoke|^Example' -timeout 60s ./...
 
+# Run benchmarks with allocation stats, 10 runs, saving output for benchstat
+bench:
+    go test -run '^$' -bench=. -benchmem -count=10 ./... | tee bench.txt
+
+# Compare two benchmark runs with benchstat (install: go install golang.org/x/perf/cmd/benchstat@latest)
+bench-compare old="old.txt" new="new.txt":
+    benchstat {{old}} {{new}}
+
 # Full check: format, vet, test with race detector
 check: fmt vet test-race
 

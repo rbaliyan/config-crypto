@@ -2,3 +2,6 @@
 compile_native_go_fuzzer github.com/rbaliyan/config-crypto FuzzReadHeader fuzz_read_header
 compile_native_go_fuzzer github.com/rbaliyan/config-crypto FuzzDecrypt fuzz_decrypt
 compile_native_go_fuzzer github.com/rbaliyan/config-crypto FuzzEncryptDecryptRoundTrip fuzz_encrypt_decrypt_round_trip
+compile_native_go_fuzzer github.com/rbaliyan/config-crypto FuzzNeedsReencryption fuzz_needs_reencryption
+compile_native_go_fuzzer github.com/rbaliyan/config-crypto FuzzCodecDecode fuzz_codec_decode
+compile_native_go_fuzzer github.com/rbaliyan/config-crypto FuzzEncryptedCacheGet fuzz_encrypted_cache_get
