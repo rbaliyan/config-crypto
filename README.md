@@ -154,7 +154,28 @@ sel, _ := crypto.NewNamespaceSelector(
     crypto.WithFallbackProvider(fallback),
 )
 defer sel.Close() // also closes all registered providers
+```
 
+### SelectorCodec (recommended)
+
+`SelectorCodec` wraps a `NamespaceSelector` with an inner codec so a **single** codec registration covers every namespace. It reads the namespace from the context — set it with `crypto.WithNamespace(ctx, ns)` — and routes Encode/Decode to the matching provider. This is the cleaner approach for most applications:
+
+```go
+sc, _ := crypto.NewSelectorCodec(sel, codec.Default())
+codec.Register(sc) // one registration covers all namespaces
+
+// Inject the namespace into ctx before store operations.
+ctx = crypto.WithNamespace(ctx, "tenant-a")
+store.Set(ctx, "tenant-a", "db-password", value)
+```
+
+`NamespaceFromContext(ctx)` reads the namespace back, and `NamespaceContextKey` is the underlying context key. If no provider matches the namespace and no fallback is registered, Encode/Decode return `ErrNoProviderForNamespace`. `NewSelectorCodec` accepts the same `WithClientCodec` / `WithCodecPrefix` options as `NewCodec`.
+
+### ForNamespace (lower-level)
+
+As a lower-level alternative, `sel.ForNamespace(ns)` yields a scoped `Provider` you can hand to a per-namespace `NewCodec`, registering one codec per namespace:
+
+```go
 // Each namespace gets a scoped Provider.
 codecA, _ := crypto.NewCodec(codec.Default(), sel.ForNamespace("tenant-a"))
 codecB, _ := crypto.NewCodec(codec.Default(), sel.ForNamespace("tenant-b"))
@@ -198,6 +219,16 @@ sel, _ := crypto.NewNamespaceSelector(
     crypto.WithFallbackProvider(defaultProvider),
 )
 encCache, _ := crypto.NewEncryptedCache(innerCache, sel)
+```
+
+**Session cache**: `crypto.NewSessionCache(capacity)` returns an `EncryptedCache` backed by an in-memory LRU and a fresh random AES-256 key generated at call time. The key never leaves process memory and is discarded on restart, so cached values cannot be read by any other process or after a restart. Pass `0` for the default capacity (10000 entries). This is the recommended in-process cache for services handling secrets — it provides at-rest protection in memory with no external KMS or Vault wiring:
+
+```go
+cache, _ := crypto.NewSessionCache(0) // default capacity (10000 entries)
+mgr, _ := config.New(
+    config.WithStore(remoteStore),
+    config.WithCache(cache),
+)
 ```
 
 ## KMS Providers
@@ -244,7 +275,7 @@ import "github.com/rbaliyan/config-crypto/gcpkms"
 // gcpkms.Client requires: Decrypt(ctx, resourceName string, ciphertext []byte) ([]byte, error)
 type myGCPClient struct{ sdk *kms.KeyManagementClient }
 func (c *myGCPClient) Decrypt(ctx context.Context, resourceName string, ciphertext []byte) ([]byte, error) {
-    resp, err := c.sdk.AsymmetricDecrypt(ctx, &kmspb.AsymmetricDecryptRequest{
+    resp, err := c.sdk.Decrypt(ctx, &kmspb.DecryptRequest{
         Name:       resourceName,
         Ciphertext: ciphertext,
     })
@@ -388,6 +419,37 @@ Each scan lists values in each configured namespace, filters to those whose code
 - **Static providers** (`NewProvider`, `NewKeyRingProvider`, and all KMS wrappers) report *liveness only* — nil unless `Close` has been called. They do not contact any backend.
 - **NamespaceSelector**: `sel.ForNamespace(ns).HealthCheck(ctx)` delegates to the registered provider for that namespace (or returns `ErrNoProviderForNamespace`).
 
+## Observability
+
+The `otel` sub-package wraps any `Provider` with OpenTelemetry tracing and metrics. Both are **opt-in** (disabled by default):
+
+```go
+import cryptootel "github.com/rbaliyan/config-crypto/otel"
+
+instrumented, _ := cryptootel.WrapProvider(provider,
+    cryptootel.WithTracesEnabled(true),
+    cryptootel.WithMetricsEnabled(true),
+)
+encJSON, _ := crypto.NewCodec(codec.Default(), instrumented)
+```
+
+`WrapProvider` returns an `*InstrumentedProvider` (also a `Provider`); `Unwrap()` returns the wrapped provider. When tracing is enabled it emits spans for `Connect`, `Encrypt`, `Decrypt`, and `HealthCheck`. When metrics are enabled it records:
+
+| Metric | Type | Description |
+|--------|------|-------------|
+| `crypto.operations.total` | counter | Total provider operations (attributes: `operation`, `provider`) |
+| `crypto.errors.total` | counter | Operation errors (adds an `error_type` attribute) |
+| `crypto.operation.duration` | histogram (seconds) | Operation latency |
+
+Use `WithTracerName` / `WithMeterName` or `WithTracer` / `WithMeter` to override the names or supply explicit tracer/meter instances.
+
+## Codec Options
+
+Both `NewCodec` and `NewSelectorCodec` accept `CodecOption` values that adjust the registered codec name:
+
+- `WithClientCodec()` prefixes the name with `client:` (yielding `client:encrypted:<inner>`) so config-server treats it as a client-managed codec and passes the bytes through without attempting to decode them.
+- `WithCodecPrefix(prefix)` adds a custom prefix (`<prefix>:encrypted:<inner>`) for cases that need something other than the standard `client:`.
+
 ## Binary Format
 
 The encrypted payload is self-describing:
@@ -406,7 +468,7 @@ The `format` byte is reserved for future wrapping schemes (e.g. post-quantum KEM
 
 ## Security Considerations
 
-Key material is defensively copied and zeroed when the Provider is closed (via `Close()`, DEK clearing, KMS provider intermediate buffers). However, Go's `crypto/aes` expands key bytes into an internal round-key schedule at cipher creation time and does not expose a way to zero that schedule. This means copies of key material may persist in heap memory until garbage-collected, even after `Close()` is called. This is a known limitation of the Go standard library and applies to all Go programs using `crypto/aes`. For threat models requiring guaranteed key erasure, use a hardware security module (HSM).
+KEK material is held inside [memguard](https://github.com/awnumar/memguard) encrypted Enclaves: keys are stored encrypted-at-rest in `mlock`'d memory (kept out of swap and invisible to heap scans between uses) and are only opened transiently as plaintext for the duration of a single Encrypt/Decrypt/wrap operation, then immediately destroyed. Key material is also defensively copied and zeroed when the Provider is closed (via `Close()`, DEK clearing, KMS provider intermediate buffers). However, Go's `crypto/aes` expands key bytes into an internal round-key schedule at cipher creation time and does not expose a way to zero that schedule. This means copies of key material may persist in heap memory until garbage-collected, even after `Close()` is called. This is a known limitation of the Go standard library and applies to all Go programs using `crypto/aes`. For threat models requiring guaranteed key erasure, use a hardware security module (HSM).
 
 ## Known Gaps
 

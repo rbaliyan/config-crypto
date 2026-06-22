@@ -269,7 +269,7 @@ func (c *EncryptedCache) Delete(ctx context.Context, namespace, key string) erro
 // other sensitive configuration values. It provides at-rest protection in memory
 // without requiring an external key management system or Vault integration.
 //
-//	cache, err := crypto.NewSessionCache(0)  // unbounded LRU
+//	cache, err := crypto.NewSessionCache(0)  // default capacity (10000 entries)
 //	mgr, err := config.New(
 //	    config.WithStore(remoteStore),
 //	    config.WithCache(cache),

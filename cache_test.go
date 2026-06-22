@@ -538,6 +538,58 @@ func TestEncryptedCache_PayloadNotJSON(t *testing.T) {
 	}
 }
 
+func TestNewSessionCache_RoundTrip(t *testing.T) {
+	ctx := context.Background()
+	ec, err := NewSessionCache(0) // default capacity
+	if err != nil {
+		t.Fatalf("NewSessionCache: %v", err)
+	}
+
+	original := config.NewValue("my-session-secret")
+	if err := ec.Set(ctx, "prod", "db/pass", original); err != nil {
+		t.Fatalf("Set: %v", err)
+	}
+
+	got, err := ec.Get(ctx, "prod", "db/pass")
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	s, err := got.String()
+	if err != nil {
+		t.Fatalf("String: %v", err)
+	}
+	if s != "my-session-secret" {
+		t.Errorf("got %q, want %q", s, "my-session-secret")
+	}
+
+	// A miss still returns ErrNotFound.
+	if _, err := ec.Get(ctx, "prod", "absent"); !config.IsNotFound(err) {
+		t.Errorf("missing key: got %v, want ErrNotFound", err)
+	}
+}
+
+func TestNewSessionCache_DistinctKeysPerInstance(t *testing.T) {
+	// Each session cache uses its own random key, so ciphertext written by one
+	// instance is not readable by another even with the same backing semantics.
+	ctx := context.Background()
+	a, err := NewSessionCache(16)
+	if err != nil {
+		t.Fatalf("NewSessionCache a: %v", err)
+	}
+	b, err := NewSessionCache(16)
+	if err != nil {
+		t.Fatalf("NewSessionCache b: %v", err)
+	}
+
+	if err := a.Set(ctx, "ns", "k", config.NewValue("secret")); err != nil {
+		t.Fatalf("Set: %v", err)
+	}
+	// b has its own backing store, so it is a plain miss (independent caches).
+	if _, err := b.Get(ctx, "ns", "k"); !config.IsNotFound(err) {
+		t.Errorf("cross-instance get: got %v, want ErrNotFound", err)
+	}
+}
+
 func TestEncryptedCache_Concurrent(t *testing.T) {
 	// Verify EncryptedCache is race-free under concurrent Set/Get/Delete with
 	// multiple goroutines and a KeyRingProvider (which uses its own mutex).

@@ -52,6 +52,10 @@ tools:
 test-all:
     go test -race ./...
 
+# Run the fast smoke subset: must-work happy paths and runnable examples
+smoke:
+    go test -run '^TestSmoke|^Example' -timeout 60s ./...
+
 # Full check: format, vet, test with race detector
 check: fmt vet test-race
 

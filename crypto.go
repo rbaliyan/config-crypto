@@ -4,7 +4,7 @@
 // that is itself wrapped by a Key Encryption Key (KEK) held by a
 // pluggable Provider.
 //
-// The package is organised around five building blocks:
+// The package is organised around the following building blocks:
 //
 //   - Codec wraps an inner codec (json, yaml, toml, …) with transparent
 //     encryption. Register the codec with config's codec registry and
@@ -16,6 +16,9 @@
 //   - NamespaceSelector routes Encrypt/Decrypt to different providers
 //     based on the config namespace — useful for multi-tenant deployments
 //     where each tenant holds its own KEK.
+//   - SelectorCodec combines a NamespaceSelector with an inner codec so a
+//     single codec registration covers all namespaces; the namespace is
+//     read from the context via WithNamespace.
 //   - Poll drives backend-agnostic runtime key rotation against any
 //     KeyRingProvider. The AWS/GCP/Azure sub-packages ship a
 //     NewPoller helper that returns a FetchFn ready to hand to Poll;
@@ -26,7 +29,8 @@
 //     by the supplied Provider before the entry reaches the backing store.
 //
 // For re-encrypting at-rest ciphertext after the current KEK changes,
-// see the rotation sub-package.
+// see the rotation sub-package. The otel sub-package provides optional
+// OpenTelemetry tracing and metrics via WrapProvider.
 package crypto
 
 import (

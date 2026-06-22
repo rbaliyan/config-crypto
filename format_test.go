@@ -12,6 +12,7 @@ import (
 )
 
 func TestHeaderV2RoundTrip(t *testing.T) {
+	t.Parallel()
 	h := &header{
 		version:      formatVersionV2,
 		format:       formatEnvelopeAESGCM,
@@ -77,6 +78,7 @@ const goldenV1Hex = "454301010676312d6b6579bbbbbbbbbbbbbbbbbbbbbbbb" +
 // TestDecryptV1GoldenVector proves that DB-stored v1 ciphertext continues to
 // decrypt under the new code. Decodes the hardcoded golden hex.
 func TestDecryptV1GoldenVector(t *testing.T) {
+	t.Parallel()
 	v1Bytes, err := hex.DecodeString(goldenV1Hex)
 	if err != nil {
 		t.Fatalf("decode golden hex: %v", err)
@@ -95,6 +97,7 @@ func TestDecryptV1GoldenVector(t *testing.T) {
 // this fires, either the v1 wire format moved (data-compat break — handle
 // separately) or the deterministic fixture inputs changed.
 func TestGoldenV1Drift(t *testing.T) {
+	t.Parallel()
 	regenerated := generateDeterministicV1(t, makeKey(32), "v1-key", []byte("legacy-v1"),
 		bytes.Repeat([]byte{0xAA}, 32),
 		bytes.Repeat([]byte{0xBB}, 12),
@@ -144,30 +147,35 @@ func generateDeterministicV1(t *testing.T, kek []byte, keyID string, plaintext, 
 }
 
 func TestReadHeaderShortData(t *testing.T) {
+	t.Parallel()
 	if _, _, err := readHeader([]byte("EC")); !IsInvalidFormat(err) {
 		t.Errorf("expected ErrInvalidFormat, got %v", err)
 	}
 }
 
 func TestReadHeaderBadMagic(t *testing.T) {
+	t.Parallel()
 	if _, _, err := readHeader([]byte("XX\x01\x01\x00")); !IsInvalidFormat(err) {
 		t.Errorf("expected ErrInvalidFormat, got %v", err)
 	}
 }
 
 func TestReadHeaderUnsupportedVersion(t *testing.T) {
+	t.Parallel()
 	if _, _, err := readHeader([]byte("EC\x99\x01\x00")); !IsInvalidFormat(err) {
 		t.Errorf("expected ErrInvalidFormat, got %v", err)
 	}
 }
 
 func TestReadHeaderV1UnsupportedAlgorithm(t *testing.T) {
+	t.Parallel()
 	if _, _, err := readHeader([]byte("EC\x01\x99\x00")); !IsInvalidFormat(err) {
 		t.Errorf("expected ErrInvalidFormat, got %v", err)
 	}
 }
 
 func TestReadHeaderV2UnsupportedFormat(t *testing.T) {
+	t.Parallel()
 	// v2 with an unknown format byte must surface ErrUnsupportedFormat.
 	data := []byte{
 		'E', 'C',
@@ -185,6 +193,7 @@ func TestReadHeaderV2UnsupportedFormat(t *testing.T) {
 }
 
 func TestReadHeaderV2TruncatedBody(t *testing.T) {
+	t.Parallel()
 	// Valid v2 prefix but truncated before encDEK.
 	data := []byte{'E', 'C', formatVersionV2, formatEnvelopeAESGCM, algAES256GCM, 0x04, 'k', 'e', 'y', '1'}
 	if _, _, err := readHeader(data); !IsInvalidFormat(err) {
@@ -193,6 +202,7 @@ func TestReadHeaderV2TruncatedBody(t *testing.T) {
 }
 
 func TestReadHeaderV2Roundtrip_VarLengthDEK(t *testing.T) {
+	t.Parallel()
 	// Construct a header with a non-48-byte wrapped DEK to exercise the
 	// variable-length path.
 	h := &header{
@@ -218,6 +228,7 @@ func TestReadHeaderV2Roundtrip_VarLengthDEK(t *testing.T) {
 }
 
 func TestWriteHeaderV2KeyIDTooLong(t *testing.T) {
+	t.Parallel()
 	h := &header{
 		version:      formatVersionV2,
 		format:       formatEnvelopeAESGCM,
@@ -234,6 +245,7 @@ func TestWriteHeaderV2KeyIDTooLong(t *testing.T) {
 }
 
 func TestReadHeaderCiphertextIsolated(t *testing.T) {
+	t.Parallel()
 	h := &header{
 		version:      formatVersionV2,
 		format:       formatEnvelopeAESGCM,
@@ -280,6 +292,7 @@ func (w *limitWriter) Write(p []byte) (int, error) {
 }
 
 func TestWriteHeaderV2FailingWriter(t *testing.T) {
+	t.Parallel()
 	h := &header{
 		version:      formatVersionV2,
 		format:       formatEnvelopeAESGCM,
@@ -302,6 +315,7 @@ func TestWriteHeaderV2FailingWriter(t *testing.T) {
 }
 
 func TestHeaderSizeV2(t *testing.T) {
+	t.Parallel()
 	keyID := "key-1"
 	expected := minHeaderSizeV2 + len(keyID) + gcmNonceSize + 2 + encryptedDEKSize + gcmNonceSize
 	if got := headerSizeV2(keyID, encryptedDEKSize); got != expected {
@@ -311,6 +325,7 @@ func TestHeaderSizeV2(t *testing.T) {
 
 // Ensure that big-endian length prefix decodes large values correctly.
 func TestEncryptedDEKLenBigEndian(t *testing.T) {
+	t.Parallel()
 	var lenBuf [2]byte
 	binary.BigEndian.PutUint16(lenBuf[:], 1024)
 	if lenBuf[0] != 0x04 || lenBuf[1] != 0x00 {
