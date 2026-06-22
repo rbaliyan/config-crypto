@@ -101,6 +101,46 @@ func mkKey(seed byte) []byte {
 	return k
 }
 
+// eventually polls cond until it returns true or the deadline elapses. It uses
+// a small tick rather than a single fixed sleep so async assertions stay
+// deterministic and do not introduce flakiness under load or -race.
+func eventually(t *testing.T, timeout time.Duration, cond func() bool) bool {
+	t.Helper()
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		if cond() {
+			return true
+		}
+		time.Sleep(time.Millisecond)
+	}
+	return cond()
+}
+
+// stableFor returns true once observe() yields the same value for `samples`
+// consecutive polls, or false if it never stabilises before the deadline. It
+// replaces a fixed confirmation sleep: instead of waiting a wall-clock window
+// and hoping nothing changed, it actively confirms a quiescent signal.
+func stableFor(t *testing.T, timeout time.Duration, samples int, observe func() int64) (int64, bool) {
+	t.Helper()
+	deadline := time.Now().Add(timeout)
+	last := observe()
+	count := 1
+	for time.Now().Before(deadline) {
+		time.Sleep(time.Millisecond)
+		cur := observe()
+		if cur == last {
+			count++
+			if count >= samples {
+				return cur, true
+			}
+		} else {
+			last = cur
+			count = 1
+		}
+	}
+	return last, false
+}
+
 func TestNew_RoundTripDecryptsAcrossVersions(t *testing.T) {
 	ctx := context.Background()
 	mock := newMock("secret", "config/key")
@@ -187,19 +227,14 @@ func TestNew_PollsForNewVersions(t *testing.T) {
 	}
 	defer v2Only.Close()
 
-	deadline := time.Now().Add(2 * time.Second)
-	var rotated bool
-	for time.Now().Before(deadline) {
+	rotated := eventually(t, 2*time.Second, func() bool {
 		ct, err := ring.Encrypt(ctx, []byte("after-rotation"))
 		if err != nil {
 			t.Fatal(err)
 		}
-		if _, err := v2Only.Decrypt(ctx, ct); err == nil {
-			rotated = true
-			break
-		}
-		time.Sleep(10 * time.Millisecond)
-	}
+		_, err = v2Only.Decrypt(ctx, ct)
+		return err == nil
+	})
 	if !rotated {
 		t.Fatal("poller never promoted v2 to current")
 	}
@@ -257,26 +292,20 @@ func TestNew_PollGivesUpOnPermanentFailure(t *testing.T) {
 	// Add a permanently-bad version (wrong key length).
 	mock.putRaw(2, map[string]string{"key": base64.StdEncoding.EncodeToString(make([]byte, 16))})
 
-	// Wait until the error rate stabilises (retries exhausted, version marked failed).
-	var stable int64
-	deadline := time.Now().Add(3 * time.Second)
-	for time.Now().Before(deadline) {
-		first := errCount.Load()
-		time.Sleep(50 * time.Millisecond)
-		second := errCount.Load()
-		if first == second && first > 0 {
-			stable = first
-			break
-		}
-	}
-	if stable == 0 {
-		t.Fatalf("error rate never stabilised; final count = %d", errCount.Load())
+	// First, wait until at least one error has been reported.
+	if !eventually(t, 3*time.Second, func() bool { return errCount.Load() > 0 }) {
+		t.Fatalf("error rate never rose; final count = %d", errCount.Load())
 	}
 
-	// Confirm: count stays put for another window.
-	time.Sleep(300 * time.Millisecond)
-	if got := errCount.Load(); got != stable {
-		t.Errorf("expected stable error count %d; got %d (poller still retrying)", stable, got)
+	// Then confirm the count quiesces: it must hold steady across many
+	// consecutive polls (retries exhausted, version permanently skipped).
+	// Polling for a stable signal replaces a fixed confirmation sleep.
+	stable, ok := stableFor(t, 3*time.Second, 200, func() int64 { return errCount.Load() })
+	if !ok {
+		t.Fatalf("error count never stabilised; final count = %d", errCount.Load())
+	}
+	if stable == 0 {
+		t.Fatalf("expected a non-zero stable error count, got %d", stable)
 	}
 }
 
@@ -304,11 +333,7 @@ func TestNew_PollSurfacesErrors(t *testing.T) {
 	mock.metaErr = errors.New("vault unreachable")
 	mock.mu.Unlock()
 
-	deadline := time.Now().Add(2 * time.Second)
-	for time.Now().Before(deadline) && errCount.Load() == 0 {
-		time.Sleep(10 * time.Millisecond)
-	}
-	if errCount.Load() == 0 {
+	if !eventually(t, 2*time.Second, func() bool { return errCount.Load() > 0 }) {
 		t.Fatal("expected refresh-error callback to fire")
 	}
 }
@@ -332,13 +357,16 @@ func TestNew_CloseStopsPolling(t *testing.T) {
 	if err := ring.Close(); err != nil {
 		t.Fatalf("Close: %v", err)
 	}
+	// stop() cancels the goroutine and blocks until it has exited, so no
+	// further metadata fetches can occur once it returns.
 	stop()
 
+	// Confirm the fetch count has quiesced: it must hold steady across many
+	// consecutive polls. If the poller were still active the count would climb.
 	before := mock.metadataHit.Load()
-	time.Sleep(50 * time.Millisecond)
-	after := mock.metadataHit.Load()
-	if after != before {
-		t.Errorf("poller still active after Close: %d -> %d", before, after)
+	if _, ok := stableFor(t, time.Second, 100, func() int64 { return mock.metadataHit.Load() }); !ok {
+		t.Errorf("poller still active after Close: count kept climbing from %d to %d",
+			before, mock.metadataHit.Load())
 	}
 }
 
@@ -401,6 +429,32 @@ func TestPoll_ValidationErrors(t *testing.T) {
 				t.Fatal("expected error")
 			}
 		})
+	}
+}
+
+// TestSmoke_ConstructHealthRoundTrip is a fast liveness check mirroring the
+// other KMS packages: construct the provider from the mock (without starting a
+// poller), verify HealthCheck, and round-trip a value.
+func TestSmoke_ConstructHealthRoundTrip(t *testing.T) {
+	ctx := context.Background()
+	mock := newMock("secret", "config/key")
+	mock.putKey(1, mkKey(1))
+
+	ring, err := New(ctx, mock, "secret", "config/key")
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	defer ring.Close()
+
+	if err := ring.HealthCheck(ctx); err != nil {
+		t.Fatalf("HealthCheck: %v", err)
+	}
+	ct, err := ring.Encrypt(ctx, []byte("smoke"))
+	if err != nil {
+		t.Fatalf("Encrypt: %v", err)
+	}
+	if got, err := ring.Decrypt(ctx, ct); err != nil || string(got) != "smoke" {
+		t.Fatalf("Decrypt: got %q err %v", got, err)
 	}
 }
 

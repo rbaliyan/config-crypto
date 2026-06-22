@@ -6,6 +6,8 @@ import (
 	"testing"
 
 	crypto "github.com/rbaliyan/config-crypto"
+	metricnoop "go.opentelemetry.io/otel/metric/noop"
+	tracenoop "go.opentelemetry.io/otel/trace/noop"
 )
 
 func makeKey(n int) []byte {
@@ -182,6 +184,57 @@ func TestInstrumentedProvider_ErrorPath_Traces(t *testing.T) {
 
 	if _, err := ip.Decrypt(ctx, []byte("not-valid")); err == nil {
 		t.Error("expected error decrypting garbage")
+	}
+}
+
+// TestWrapProvider_WithCustomTracerAndMeter exercises the WithTracer and
+// WithMeter options, which inject explicit instruments instead of resolving
+// from the global providers. A round-trip confirms the injected instruments
+// are wired in without breaking encrypt/decrypt.
+func TestWrapProvider_WithCustomTracerAndMeter(t *testing.T) {
+	ctx := context.Background()
+	tracer := tracenoop.NewTracerProvider().Tracer("custom-tracer")
+	meter := metricnoop.NewMeterProvider().Meter("custom-meter")
+
+	ip := mustWrap(t,
+		WithTracesEnabled(true),
+		WithMetricsEnabled(true),
+		WithTracer(tracer),
+		WithMeter(meter),
+	)
+
+	ct, err := ip.Encrypt(ctx, []byte("custom"))
+	if err != nil {
+		t.Fatalf("Encrypt: %v", err)
+	}
+	pt, err := ip.Decrypt(ctx, ct)
+	if err != nil {
+		t.Fatalf("Decrypt: %v", err)
+	}
+	if string(pt) != "custom" {
+		t.Errorf("got %q, want custom", pt)
+	}
+	if err := ip.HealthCheck(ctx); err != nil {
+		t.Errorf("HealthCheck: %v", err)
+	}
+}
+
+// TestSmoke_OTelWrapRoundTrip is a fast liveness check for the instrumented
+// provider: wrap a basic provider with traces and metrics enabled, do one
+// Encrypt->Decrypt round-trip, and confirm HealthCheck succeeds.
+func TestSmoke_OTelWrapRoundTrip(t *testing.T) {
+	ctx := context.Background()
+	ip := mustWrap(t, WithTracesEnabled(true), WithMetricsEnabled(true))
+
+	ct, err := ip.Encrypt(ctx, []byte("smoke"))
+	if err != nil {
+		t.Fatalf("Encrypt: %v", err)
+	}
+	if got, err := ip.Decrypt(ctx, ct); err != nil || string(got) != "smoke" {
+		t.Fatalf("Decrypt: got %q err %v", got, err)
+	}
+	if err := ip.HealthCheck(ctx); err != nil {
+		t.Fatalf("HealthCheck: %v", err)
 	}
 }
 

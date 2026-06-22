@@ -142,3 +142,57 @@ func TestNew_WithAlgorithm(t *testing.T) {
 	}
 	defer provider.Close()
 }
+
+func TestNew_HealthCheckAndClose(t *testing.T) {
+	ctx := context.Background()
+	client := &mockClient{keys: map[string][]byte{"wrap-1": makeKey(1)}}
+	provider, err := New(ctx, client, WithWrappedKey([]byte("wrap-1"), "key-1", "my-key", "v1"))
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	if err := provider.HealthCheck(ctx); err != nil {
+		t.Errorf("HealthCheck (healthy): got %v, want nil", err)
+	}
+
+	ct, err := provider.Encrypt(ctx, []byte("hello"))
+	if err != nil {
+		t.Fatalf("Encrypt: %v", err)
+	}
+	if got, err := provider.Decrypt(ctx, ct); err != nil {
+		t.Fatalf("Decrypt: %v", err)
+	} else if string(got) != "hello" {
+		t.Errorf("got %q", got)
+	}
+
+	if err := provider.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	if _, err := provider.Encrypt(ctx, []byte("x")); !crypto.IsProviderClosed(err) {
+		t.Errorf("Encrypt after Close: got %v, want ErrProviderClosed", err)
+	}
+	if err := provider.HealthCheck(ctx); !crypto.IsProviderClosed(err) {
+		t.Errorf("HealthCheck after Close: got %v, want ErrProviderClosed", err)
+	}
+}
+
+// TestSmoke_ConstructHealthRoundTrip is a fast liveness check.
+func TestSmoke_ConstructHealthRoundTrip(t *testing.T) {
+	ctx := context.Background()
+	client := &mockClient{keys: map[string][]byte{"wrap-1": makeKey(1)}}
+	provider, err := New(ctx, client, WithWrappedKey([]byte("wrap-1"), "key-1", "my-key", "v1"))
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	defer provider.Close()
+	if err := provider.HealthCheck(ctx); err != nil {
+		t.Fatalf("HealthCheck: %v", err)
+	}
+	ct, err := provider.Encrypt(ctx, []byte("smoke"))
+	if err != nil {
+		t.Fatalf("Encrypt: %v", err)
+	}
+	if got, err := provider.Decrypt(ctx, ct); err != nil || string(got) != "smoke" {
+		t.Fatalf("Decrypt: got %q err %v", got, err)
+	}
+}

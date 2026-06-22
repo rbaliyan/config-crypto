@@ -16,7 +16,7 @@ We currently only support the latest version of the project.
 - **Code Scanning**: GitHub CodeQL analysis on every PR
 - **Dependency Pinning**: All CI actions and tools are pinned by hash
 - **Dependency Updates**: Dependabot monitors for outdated and vulnerable dependencies
-- **Key Material Safety**: DEKs are zeroed after use, providers support `Close()` for KEK cleanup
+- **Key Material Safety**: KEKs are held in [memguard](https://github.com/awnumar/memguard) encrypted Enclaves (encrypted-at-rest, `mlock`'d, only transiently exposed as plaintext per operation), DEKs are zeroed after use, and providers support `Close()` for KEK cleanup
 
 ## Reporting a Vulnerability
 

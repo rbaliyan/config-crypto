@@ -95,13 +95,17 @@ A golden byte-vector test (`TestDecryptV1GoldenVector` + `TestGoldenV1Drift` in 
 |------|----------|
 | `crypto.go` | `Codec` struct implementing `codec.Codec` + `codec.Transformer`; wraps inner codec; threads ctx to Provider |
 | `provider.go` | `Provider` interface (Name/Connect/Encrypt/Decrypt/HealthCheck/Close); `NewProvider` delegates to `keyRingProvider` with rotation methods hidden |
-| `keyring_provider.go` | `KeyRingProvider` interface (embeds Provider + AddKey/SetCurrentKey/RemoveKey/CurrentKeyID/NeedsReencryption), `NewKeyRingProvider`, unexported `keyRingProvider` struct |
+| `keyring_provider.go` | `KeyRingProvider` interface (embeds Provider + AddKey/SetCurrentKey/RemoveKey/CurrentKeyID/NeedsReencryption), `NewKeyRingProvider`, unexported `keyRingProvider` struct; KEKs held in memguard encrypted Enclaves (mlock'd, opened transiently per op via `enclave.Open()`/`Destroy()`) |
 | `namespace_provider.go` | `NamespaceSelector`, `WithNamespaceProvider`, `WithFallbackProvider`, `ForNamespace`, `AddProvider`, `RemoveProvider`, `RemoveAndClose`, `Close` |
+| `selector_codec.go` | `SelectorCodec` (single codec registration over a `NamespaceSelector`, routes by ctx namespace); `NewSelectorCodec`; `WithNamespace`/`NamespaceFromContext`/`NamespaceContextKey`; implements `codec.Codec` + `codec.Transformer` |
+| `poll.go` | `Poll` — generic backend-agnostic key-rotation goroutine driven by a `FetchFn`; `KeyVersion`, `FetchFn`, `WithPollErrorHandler`, `WithPollMaxRetries` (default 5); fail-fast initial fetch, per-version retry cap |
 | `encrypt.go` | `encryptEnvelope` — generates DEK, encrypts data, wraps DEK with KEK, zeroes DEK, writes v2 header |
 | `decrypt.go` | `decryptEnvelope` — reads v1 or v2 header via `readHeader`, unwraps DEK (via `keyLookupFunc`), decrypts data, zeroes DEK |
 | `format.go` | Binary format constants, `header` struct, `writeHeaderV2`, `readHeader`/`readHeaderV1`/`readHeaderV2` with defensive copies |
-| `errors.go` | Sentinel errors with `Is*()` helpers: `ErrKeyNotFound`, `ErrInvalidKeySize`, `ErrInvalidFormat`, `ErrUnsupportedFormat`, `ErrDecryptionFailed`, `ErrInvalidKeyID`, `ErrProviderClosed`, `ErrRemoveCurrentKey`, `ErrNoProviderForNamespace` |
-| `cache.go` | `EncryptedCache` — wraps any `config.Cache`; encrypts full value payload (data, codec, type, metadata) via Provider before storage; decrypts on retrieval; treats crypto failures as cache misses; propagates provider operational failures |
+| `errors.go` | Sentinel errors with `Is*()` helpers: `ErrKeyNotFound`, `ErrInvalidKeySize`, `ErrInvalidFormat`, `ErrUnsupportedFormat`, `ErrDecryptionFailed`, `ErrInvalidKeyID`, `ErrProviderClosed`, `ErrRemoveCurrentKey`, `ErrNoProviderForNamespace`, `ErrDuplicateKeyID` |
+| `cache.go` | `EncryptedCache` — wraps any `config.Cache`; encrypts full value payload (data, codec, type, metadata) via Provider before storage; decrypts on retrieval; treats crypto failures as cache misses; propagates provider operational failures. `NewSessionCache(capacity)` — in-memory LRU + fresh random AES-256 key (0 = default 10000 entries) for in-process secret caching |
+| `otel/` | `WrapProvider` wraps any `Provider` with opt-in OpenTelemetry tracing + metrics; `InstrumentedProvider` (also a `Provider`, with `Unwrap()`); metrics `crypto.operations.total`, `crypto.errors.total`, `crypto.operation.duration`; `WithTracesEnabled`/`WithMetricsEnabled`/`WithTracer`/`WithMeter`/`WithTracerName`/`WithMeterName` |
+| `internal/kmsring/` | Internal `Build` helper that unwraps N encrypted keys and constructs a `crypto.KeyRingProvider` (first key current, rest added for decryption), zeroing decrypted bytes; shared by all KMS adapters |
 | `benchmark_test.go` | Benchmarks for encode/decode at 1KB, 64KB, 1MB, and string payloads |
 
 ### KMS Provider Packages

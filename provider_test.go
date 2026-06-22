@@ -9,6 +9,7 @@ import (
 )
 
 func TestNewProvider_RoundTrip(t *testing.T) {
+	t.Parallel()
 	p := mustNewProvider(t, makeKey(32), "key-1")
 	ctx := context.Background()
 
@@ -32,6 +33,7 @@ func TestNewProvider_RoundTrip(t *testing.T) {
 }
 
 func TestNewProvider_OldKeyDecryptsLegacy(t *testing.T) {
+	t.Parallel()
 	old := makeKey(32)
 	newer := append([]byte(nil), old...)
 	for i := range newer {
@@ -65,6 +67,7 @@ func TestNewProvider_OldKeyDecryptsLegacy(t *testing.T) {
 }
 
 func TestNewProvider_Validation(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		name string
 		key  []byte
@@ -76,6 +79,7 @@ func TestNewProvider_Validation(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
 			_, err := NewProvider(c.key, c.id)
 			if err == nil {
 				t.Fatal("expected error")
@@ -85,6 +89,7 @@ func TestNewProvider_Validation(t *testing.T) {
 }
 
 func TestNewProvider_HealthCheck(t *testing.T) {
+	t.Parallel()
 	p := mustNewProvider(t, makeKey(32), "k")
 	if err := p.HealthCheck(context.Background()); err != nil {
 		t.Errorf("healthy: %v", err)
@@ -92,6 +97,7 @@ func TestNewProvider_HealthCheck(t *testing.T) {
 }
 
 func TestNewProvider_HealthCheckAfterClose(t *testing.T) {
+	t.Parallel()
 	p, err := NewProvider(makeKey(32), "k")
 	if err != nil {
 		t.Fatal(err)
@@ -103,6 +109,7 @@ func TestNewProvider_HealthCheckAfterClose(t *testing.T) {
 }
 
 func TestNewProvider_Close(t *testing.T) {
+	t.Parallel()
 	p, err := NewProvider(makeKey(32), "key-1")
 	if err != nil {
 		t.Fatal(err)
@@ -123,6 +130,7 @@ func TestNewProvider_Close(t *testing.T) {
 }
 
 func TestNewProvider_KeyBytesIsolated(t *testing.T) {
+	t.Parallel()
 	original := makeKey(32)
 	p := mustNewProvider(t, original, "k")
 
@@ -144,6 +152,7 @@ func TestNewProvider_KeyBytesIsolated(t *testing.T) {
 }
 
 func TestKeyRingProvider_AddSetRemoveCurrent(t *testing.T) {
+	t.Parallel()
 	rp := mustNewKeyRingProvider(t, makeKey(32), "v1", 1)
 	ctx := context.Background()
 
@@ -200,6 +209,7 @@ func TestKeyRingProvider_AddSetRemoveCurrent(t *testing.T) {
 }
 
 func TestKeyRingProvider_SetCurrentKeyUnknown(t *testing.T) {
+	t.Parallel()
 	rp := mustNewKeyRingProvider(t, makeKey(32), "v1", 0)
 	if err := rp.SetCurrentKey("nonexistent"); !errors.Is(err, ErrKeyNotFound) {
 		t.Errorf("got %v, want ErrKeyNotFound", err)
@@ -207,6 +217,7 @@ func TestKeyRingProvider_SetCurrentKeyUnknown(t *testing.T) {
 }
 
 func TestKeyRingProvider_AddKeyValidation(t *testing.T) {
+	t.Parallel()
 	rp := mustNewKeyRingProvider(t, makeKey(32), "v1", 0)
 	if err := rp.AddKey(makeKey(16), "bad", 0); !errors.Is(err, ErrInvalidKeySize) {
 		t.Errorf("AddKey bad size: got %v, want ErrInvalidKeySize", err)
@@ -221,6 +232,7 @@ func TestKeyRingProvider_AddKeyValidation(t *testing.T) {
 }
 
 func TestProvider_NameAndConnect(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 
 	p := mustNewProvider(t, makeKey(32), "my-key")
@@ -233,6 +245,7 @@ func TestProvider_NameAndConnect(t *testing.T) {
 }
 
 func TestKeyRingProvider_NameAndConnect(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 
 	rp := mustNewKeyRingProvider(t, makeKey(32), "v1", 0)
@@ -260,6 +273,7 @@ func TestKeyRingProvider_NameAndConnect(t *testing.T) {
 }
 
 func TestKeyRingProvider_Close(t *testing.T) {
+	t.Parallel()
 	rp, err := NewKeyRingProvider(makeKey(32), "v1", 0)
 	if err != nil {
 		t.Fatal(err)
@@ -303,6 +317,7 @@ func TestKeyRingProvider_Concurrent(t *testing.T) {
 }
 
 func TestKeyRingProvider_NeedsReencryption(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 
 	v1 := makeKey(32)
@@ -337,6 +352,7 @@ func TestKeyRingProvider_NeedsReencryption(t *testing.T) {
 	}
 
 	t.Run("current key returns false", func(t *testing.T) {
+		t.Parallel()
 		ct := encryptWith(t, v2, "v2")
 		got, err := rp.NeedsReencryption(ct)
 		if err != nil {
@@ -348,6 +364,7 @@ func TestKeyRingProvider_NeedsReencryption(t *testing.T) {
 	})
 
 	t.Run("older rank returns true", func(t *testing.T) {
+		t.Parallel()
 		ct := encryptWith(t, v1, "v1")
 		got, err := rp.NeedsReencryption(ct)
 		if err != nil {
@@ -359,6 +376,7 @@ func TestKeyRingProvider_NeedsReencryption(t *testing.T) {
 	})
 
 	t.Run("higher rank returns false", func(t *testing.T) {
+		t.Parallel()
 		// Simulate a future key with a higher rank than current.
 		v3 := makeKey(32)
 		for i := range v3 {
@@ -376,6 +394,7 @@ func TestKeyRingProvider_NeedsReencryption(t *testing.T) {
 	})
 
 	t.Run("unknown key ID returns false", func(t *testing.T) {
+		t.Parallel()
 		vUnknown := makeKey(32)
 		for i := range vUnknown {
 			vUnknown[i] ^= 0x33
@@ -391,6 +410,7 @@ func TestKeyRingProvider_NeedsReencryption(t *testing.T) {
 	})
 
 	t.Run("unparseable ciphertext returns error", func(t *testing.T) {
+		t.Parallel()
 		_, err := rp.NeedsReencryption([]byte("not valid ciphertext"))
 		if err == nil {
 			t.Error("expected error for invalid ciphertext")
@@ -398,6 +418,7 @@ func TestKeyRingProvider_NeedsReencryption(t *testing.T) {
 	})
 
 	t.Run("equal rank returns false", func(t *testing.T) {
+		t.Parallel()
 		// Add a key with same rank as current (2); it is older by ID but not by rank.
 		v2b := makeKey(32)
 		for i := range v2b {

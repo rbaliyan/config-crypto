@@ -255,6 +255,34 @@ func TestNamespaceSelector_Concurrent(t *testing.T) {
 	wg.Wait()
 }
 
+func TestScopedProvider_HealthCheck(t *testing.T) {
+	ctx := context.Background()
+	pa := mustNewProvider(t, makeKey(32), "key-a")
+
+	sel, err := NewNamespaceSelector(WithNamespaceProvider("prod", pa))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Healthy provider: delegates to the underlying provider, returns nil.
+	if err := sel.ForNamespace("prod").HealthCheck(ctx); err != nil {
+		t.Errorf("healthy namespace: got %v, want nil", err)
+	}
+
+	// No provider for the namespace and no fallback: ErrNoProviderForNamespace.
+	if err := sel.ForNamespace("missing").HealthCheck(ctx); !errors.Is(err, ErrNoProviderForNamespace) {
+		t.Errorf("missing namespace: got %v, want ErrNoProviderForNamespace", err)
+	}
+
+	// After the selector is closed: ErrProviderClosed.
+	if err := sel.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	if err := sel.ForNamespace("prod").HealthCheck(ctx); !errors.Is(err, ErrProviderClosed) {
+		t.Errorf("after close: got %v, want ErrProviderClosed", err)
+	}
+}
+
 func TestScopedProvider_NameAndConnect(t *testing.T) {
 	ctx := context.Background()
 	pa := mustNewProvider(t, makeKey(32), "key-a")

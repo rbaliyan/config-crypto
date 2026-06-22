@@ -21,7 +21,7 @@ type KeyRingProvider interface {
 	// key. The keyBytes must be 32 bytes for AES-256 and id must not be empty.
 	// rank is the KV store version number for this key; it is used by
 	// NeedsReencryption to establish ordering. Pass 0 when the backing store
-	// does not provide version ordering. Returns ErrInvalidKeyID if the ID
+	// does not provide version ordering. Returns ErrDuplicateKeyID if the ID
 	// already exists.
 	AddKey(keyBytes []byte, id string, rank uint64) error
 
